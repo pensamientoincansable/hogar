@@ -61,7 +61,8 @@ class RemoteVisionApp {
         this.uptimeInterval = null;
         this.connectionStartTime = null;
         this.statsInterval = null;
-        this.localAudioStream = null; // Para el audio del supervisor
+        this.localAudioStream = null;
+        this.connectionTimeouts = [];
 
         // Elementos del DOM
         this.elements = {
@@ -190,11 +191,13 @@ class RemoteVisionApp {
                 });
                 
                 // Timeout para inicialización
-                setTimeout(() => {
+                const initTimeout = setTimeout(() => {
                     if (!this.state.peerId) {
                         reject('Timeout al conectar con el servidor PeerJS');
                     }
-                }, 10000);
+                }, 15000);
+                
+                this.connectionTimeouts.push(initTimeout);
                 
             } catch (error) {
                 console.error('Error al crear instancia de Peer:', error);
@@ -348,6 +351,9 @@ class RemoteVisionApp {
             this.peer.destroy();
             this.peer = null;
         }
+        
+        // Limpiar todos los timeouts
+        this.clearAllTimeouts();
         
         this.state.isEmitter = false;
         this.state.isViewer = false;
@@ -580,22 +586,15 @@ class RemoteVisionApp {
 
     async attemptConnection(code) {
         try {
-            const timeout = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error('Timeout de conexión')), 10000);
-            });
+            // Limpiar timeouts anteriores
+            this.clearAllTimeouts();
             
             if (!this.peer || this.peer.disconnected) {
                 throw new Error('No conectado al servidor PeerJS');
             }
             
-            // Primero intentamos conexión de datos
-            const dataConn = this.peer.connect(code, {
-                reliable: true,
-                serialization: 'json'
-            });
-            
-            // Configurar la conexión de datos
-            await this.setupDataConnection(dataConn);
+            // Primero intentamos conexión de datos con timeout
+            await this.attemptDataConnection(code);
             
             // Ahora intentamos la llamada de video
             await this.attemptVideoCall(code);
@@ -606,67 +605,109 @@ class RemoteVisionApp {
         }
     }
 
+    async attemptDataConnection(code) {
+        return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                reject(new Error('Timeout de conexión de datos (10 segundos)'));
+            }, 10000);
+            
+            this.connectionTimeouts.push(timeout);
+            
+            const dataConn = this.peer.connect(code, {
+                reliable: true,
+                serialization: 'json'
+            });
+            
+            dataConn.on('open', () => {
+                clearTimeout(timeout);
+                console.log('✅ Conexión de datos abierta con:', dataConn.peer);
+                this.dataConnection = dataConn;
+                
+                dataConn.on('data', (data) => {
+                    this.handleDataMessage(data);
+                });
+                
+                dataConn.on('close', () => {
+                    console.log('Conexión de datos cerrada');
+                    this.dataConnection = null;
+                    if (this.state.isConnected) {
+                        this.handleDisconnection();
+                    }
+                });
+                
+                dataConn.on('error', (err) => {
+                    console.error('Error en conexión de datos:', err);
+                });
+                
+                resolve();
+            });
+            
+            dataConn.on('error', (err) => {
+                clearTimeout(timeout);
+                console.error('Error en conexión de datos:', err);
+                reject(new Error('Error en conexión de datos: ' + err.message));
+            });
+        });
+    }
+
     async attemptVideoCall(code) {
         return new Promise(async (resolve, reject) => {
             try {
-                // Para el supervisor, necesitamos un stream local (aunque sea falso)
-                // PeerJS requiere un stream para hacer una llamada, incluso si solo vamos a recibir
+                // Timeout para la llamada de video
+                const callTimeout = setTimeout(() => {
+                    reject(new Error('Timeout esperando stream del emisor (20 segundos)'));
+                }, 20000);
+                
+                this.connectionTimeouts.push(callTimeout);
+                
+                // Crear un stream de audio vacío para la llamada
                 let localStream;
                 
                 try {
-                    // Intentamos obtener un stream de audio mínimo
-                    localStream = await navigator.mediaDevices.getUserMedia({
-                        audio: true,
-                        video: false
-                    });
-                    
-                    // Silenciamos el audio local para no enviar ruido
-                    localStream.getAudioTracks().forEach(track => {
-                        track.enabled = false;
-                    });
-                    
-                } catch (audioError) {
-                    console.log('No se pudo obtener audio local, usando stream vacío');
-                    // Creamos un stream de audio vacío como fallback
-                    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                    const destination = audioContext.createMediaStreamDestination();
-                    localStream = destination.stream;
+                    // Usar un stream de audio silencioso para la llamada
+                    localStream = await this.createSilentAudioStream();
+                } catch (error) {
+                    console.log('No se pudo crear stream de audio, continuando sin él:', error);
+                    localStream = null;
                 }
                 
-                // Hacer la llamada CON el stream local
+                // Hacer la llamada
                 const call = this.peer.call(code, localStream);
                 
                 if (!call) {
+                    clearTimeout(callTimeout);
                     throw new Error('No se pudo crear la llamada');
                 }
                 
                 // Guardar el stream local para limpiarlo después
-                this.localAudioStream = localStream;
+                if (localStream) {
+                    this.localAudioStream = localStream;
+                }
                 
                 call.on('stream', (remoteStream) => {
+                    clearTimeout(callTimeout);
                     console.log('✅ Stream remoto recibido');
                     this.handleRemoteStream(remoteStream);
                     resolve();
                 });
                 
                 call.on('close', () => {
+                    clearTimeout(callTimeout);
                     console.log('Llamada cerrada');
-                    this.handleDisconnection();
+                    if (!this.state.isConnected) {
+                        reject(new Error('Llamada cerrada antes de recibir stream'));
+                    } else {
+                        this.handleDisconnection();
+                    }
                 });
                 
                 call.on('error', (err) => {
+                    clearTimeout(callTimeout);
                     console.error('Error en llamada:', err);
                     reject(new Error('Error en la llamada de video: ' + err.message));
                 });
                 
                 this.currentCall = call;
-                
-                // Timeout para la llamada
-                setTimeout(() => {
-                    if (!this.state.isConnected) {
-                        reject(new Error('Timeout esperando stream del emisor'));
-                    }
-                }, 15000);
                 
             } catch (error) {
                 reject(error);
@@ -674,10 +715,53 @@ class RemoteVisionApp {
         });
     }
 
+    async createSilentAudioStream() {
+        try {
+            // Intentar crear un stream de audio vacío sin pedir permisos
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            
+            // Configurar oscilador silencioso
+            gainNode.gain.value = 0;
+            oscillator.connect(gainNode);
+            
+            const destination = audioContext.createMediaStreamDestination();
+            gainNode.connect(destination);
+            
+            oscillator.start();
+            
+            // Detener el oscilador inmediatamente (solo queríamos el stream vacío)
+            setTimeout(() => {
+                oscillator.stop();
+            }, 100);
+            
+            return destination.stream;
+            
+        } catch (error) {
+            console.log('Error creando stream de audio silencioso:', error);
+            
+            // Fallback: intentar obtener permiso para micrófono
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                // Silenciar el micrófono
+                stream.getAudioTracks().forEach(track => {
+                    track.enabled = false;
+                });
+                return stream;
+            } catch (audioError) {
+                throw new Error('No se pudo crear stream de audio');
+            }
+        }
+    }
+
     handleRemoteStream(stream) {
         this.remoteStream = stream;
         this.elements.remoteVideo.srcObject = stream;
         this.elements.connectionOverlay.classList.add('hidden');
+        
+        // Configurar eventos del video para móviles
+        this.setupVideoForMobile();
         
         this.elements.remoteVideo.volume = this.elements.remoteVolume.value / 100;
         
@@ -695,40 +779,54 @@ class RemoteVisionApp {
         this.updateConnectionStats();
     }
 
-    setupDataConnection(conn) {
-        return new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
-                reject(new Error('Timeout de conexión de datos'));
-            }, 5000);
+    setupVideoForMobile() {
+        // Para móviles, necesitamos manejar la reproducción de video
+        const video = this.elements.remoteVideo;
+        
+        // Intentar reproducir automáticamente
+        video.play().catch(error => {
+            console.log('Autoplay bloqueado, requerir interacción del usuario:', error);
             
-            conn.on('open', () => {
-                clearTimeout(timeout);
-                console.log('✅ Conexión de datos abierta con:', conn.peer);
-                this.dataConnection = conn;
-                
-                conn.on('data', (data) => {
-                    this.handleDataMessage(data);
+            // Mostrar mensaje para el usuario
+            this.showNotification('Toca la pantalla para iniciar el video', 'warning');
+            
+            // Configurar para reproducir en la siguiente interacción del usuario
+            const playOnInteraction = () => {
+                video.play().then(() => {
+                    console.log('Video reproducido después de interacción');
+                }).catch(err => {
+                    console.log('Error al reproducir video:', err);
                 });
                 
-                conn.on('close', () => {
-                    console.log('Conexión de datos cerrada');
-                    this.dataConnection = null;
-                    if (this.state.isConnected) {
-                        this.handleDisconnection();
-                    }
-                });
-                
-                conn.on('error', (err) => {
-                    console.error('Error en conexión de datos:', err);
-                });
-                
-                resolve();
+                // Remover listeners después de usarlos
+                document.removeEventListener('click', playOnInteraction);
+                document.removeEventListener('touchstart', playOnInteraction);
+            };
+            
+            document.addEventListener('click', playOnInteraction);
+            document.addEventListener('touchstart', playOnInteraction);
+        });
+    }
+
+    setupDataConnection(conn) {
+        conn.on('open', () => {
+            console.log('✅ Conexión de datos recibida de emisor:', conn.peer);
+            this.dataConnection = conn;
+            
+            conn.on('data', (data) => {
+                this.handleDataMessage(data);
+            });
+            
+            conn.on('close', () => {
+                console.log('Conexión de datos cerrada');
+                this.dataConnection = null;
+                if (this.state.isConnected) {
+                    this.handleDisconnection();
+                }
             });
             
             conn.on('error', (err) => {
-                clearTimeout(timeout);
                 console.error('Error en conexión de datos:', err);
-                reject(new Error('Error en conexión de datos: ' + err.message));
             });
         });
     }
@@ -965,6 +1063,9 @@ class RemoteVisionApp {
     }
 
     disconnectFromEmitter() {
+        // Limpiar timeouts
+        this.clearAllTimeouts();
+        
         if (this.currentCall) {
             this.currentCall.close();
             this.currentCall = null;
@@ -1158,6 +1259,14 @@ class RemoteVisionApp {
             clearInterval(this.statsInterval);
             this.statsInterval = null;
         }
+    }
+
+    clearAllTimeouts() {
+        // Limpiar todos los timeouts almacenados
+        this.connectionTimeouts.forEach(timeout => {
+            clearTimeout(timeout);
+        });
+        this.connectionTimeouts = [];
     }
 
     showNotification(message, type = 'info') {
