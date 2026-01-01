@@ -3,318 +3,323 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vigilancia Simple - WebRTC</title>
+    <title>🔭 Visión Remota | Sistema de Vigilancia</title>
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            background: #f5f5f5;
-            min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 20px;
-        }
-        
-        .container {
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
-            width: 100%;
-            max-width: 500px;
-            padding: 30px;
-        }
-        
-        h1 {
-            text-align: center;
-            color: #333;
-            margin-bottom: 30px;
-            font-size: 28px;
-        }
-        
-        h2 {
-            color: #444;
-            margin-bottom: 20px;
-            font-size: 22px;
-        }
-        
-        .mode-selection {
-            text-align: center;
-        }
-        
-        .mode-buttons {
-            display: flex;
-            gap: 15px;
-            margin-top: 20px;
-        }
-        
-        .btn {
-            flex: 1;
-            padding: 16px;
-            border: none;
-            border-radius: 12px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-        }
-        
-        .btn-primary {
-            background: #4CAF50;
-            color: white;
-        }
-        
-        .btn-secondary {
-            background: #2196F3;
-            color: white;
-        }
-        
-        .btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
-        }
-        
-        .hidden {
-            display: none !important;
-        }
-        
-        .panel {
-            animation: fadeIn 0.5s ease;
-        }
-        
-        video {
-            width: 100%;
-            border-radius: 12px;
-            background: #000;
-            margin: 20px 0;
-            border: 3px solid #ddd;
-        }
-        
-        #localVideo {
-            transform: scaleX(-1);
-        }
-        
-        .code-display {
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 12px;
-            text-align: center;
-            margin: 20px 0;
-            border: 2px dashed #ddd;
-        }
-        
-        .code {
-            font-family: monospace;
-            font-size: 32px;
-            font-weight: bold;
-            color: #2196F3;
-            letter-spacing: 5px;
-        }
-        
-        .instructions {
-            color: #666;
-            font-size: 14px;
-            margin: 10px 0;
-        }
-        
-        .connection-input {
-            display: flex;
-            gap: 10px;
-            margin: 20px 0;
-        }
-        
-        input[type="text"] {
-            flex: 1;
-            padding: 15px;
-            border: 2px solid #ddd;
-            border-radius: 12px;
-            font-size: 16px;
-        }
-        
-        .status {
-            padding: 10px;
-            border-radius: 8px;
-            text-align: center;
-            margin: 10px 0;
-            font-weight: 600;
-        }
-        
-        .status-connecting {
-            background: #fff3cd;
-            color: #856404;
-            border: 1px solid #ffeaa7;
-        }
-        
-        .status-connected {
-            background: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
-        }
-        
-        .status-error {
-            background: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
-        }
-        
-        .back-btn {
-            background: none;
-            border: none;
-            color: #666;
-            font-size: 14px;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            margin-bottom: 20px;
-            padding: 10px 0;
-        }
-        
-        .back-btn:hover {
-            color: #333;
-        }
-        
-        @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
-        }
-        
-        @media (max-width: 600px) {
-            .container {
-                padding: 20px;
-                border-radius: 15px;
-            }
-            
-            .mode-buttons {
-                flex-direction: column;
-            }
-            
-            .code {
-                font-size: 24px;
-                letter-spacing: 3px;
-            }
-            
-            .connection-input {
-                flex-direction: column;
-            }
-        }
-    </style>
 </head>
 <body>
+    <!-- Fondo futurista -->
+    <div class="background">
+        <div class="grid-lines"></div>
+        <div class="particles"></div>
+        <div class="glow-effect"></div>
+    </div>
+
+    <!-- Contenedor principal -->
     <div class="container">
-        <!-- Pantalla de inicio -->
-        <div id="startScreen">
-            <h1>🔍 Vigilancia Simple</h1>
-            <p style="text-align: center; color: #666; margin-bottom: 30px;">
-                Sistema de vigilancia en tiempo real usando WebRTC
-            </p>
-            
-            <div class="mode-selection">
-                <h2>Selecciona tu rol:</h2>
-                <div class="mode-buttons">
-                    <button class="btn btn-primary" id="btnEmitter">
-                        📹 Ser Emisor (Cámara)
-                    </button>
-                    <button class="btn btn-secondary" id="btnViewer">
-                        👁️ Ser Supervisor
+        <!-- Encabezado -->
+        <header class="header">
+            <div class="logo">
+                <i class="fas fa-satellite-dish"></i>
+                <h1>Visión<span>Remota</span></h1>
+                <div class="status-dot connected"></div>
+            </div>
+            <div class="connection-info">
+                <span id="connectionStatus" class="status">🟢 Conectado</span>
+            </div>
+        </header>
+
+        <!-- Pantalla de selección de modo -->
+        <main id="modeSelection" class="main-content">
+            <div class="intro-card">
+                <div class="pulse-ring"></div>
+                <h2><i class="fas fa-broadcast-tower"></i> Sistema de Vigilancia WebRTC</h2>
+                <p class="subtitle">Conecta dispositivos en tiempo real con transmisión de audio y video</p>
+            </div>
+
+            <div class="mode-cards">
+                <div class="mode-card emitter">
+                    <div class="mode-icon">
+                        <i class="fas fa-video"></i>
+                        <div class="holographic-effect"></div>
+                    </div>
+                    <h3>Modo Emisor</h3>
+                    <p class="mode-description">
+                        Comparte tu cámara y micrófono. Genera un código para que otros se conecten a tu transmisión en vivo.
+                    </p>
+                    <div class="features">
+                        <span><i class="fas fa-camera"></i> Cámara HD</span>
+                        <span><i class="fas fa-microphone"></i> Audio en vivo</span>
+                        <span><i class="fas fa-shield-alt"></i> Código seguro</span>
+                    </div>
+                    <button id="btnEmitter" class="glow-button">
+                        <i class="fas fa-play-circle"></i> Activar como Emisor
                     </button>
                 </div>
-                
-                <div style="margin-top: 30px; padding: 20px; background: #f8f9fa; border-radius: 12px;">
-                    <h3 style="color: #444; margin-bottom: 10px;">¿Cómo funciona?</h3>
-                    <p style="color: #666; font-size: 14px; line-height: 1.6;">
-                        1. <strong>Emisor:</strong> Comparte tu cámara y genera un código único<br>
-                        2. <strong>Supervisor:</strong> Introduce el código para ver la transmisión<br>
-                        3. <strong>Conexión:</strong> Comunicación directa entre dispositivos (P2P)
+
+                <div class="mode-card viewer">
+                    <div class="mode-icon">
+                        <i class="fas fa-eye"></i>
+                        <div class="holographic-effect"></div>
+                    </div>
+                    <h3>Modo Supervisor</h3>
+                    <p class="mode-description">
+                        Conéctate a una transmisión en vivo usando el código del emisor. Visualiza y comunícate en tiempo real.
+                    </p>
+                    <div class="features">
+                        <span><i class="fas fa-desktop"></i> Visualización</span>
+                        <span><i class="fas fa-comment-alt"></i> Comunicación</span>
+                        <span><i class="fas fa-expand"></i> Pantalla completa</span>
+                    </div>
+                    <button id="btnViewer" class="glow-button">
+                        <i class="fas fa-plug"></i> Conectar como Supervisor
+                    </button>
+                </div>
+            </div>
+
+            <div class="instructions">
+                <h4><i class="fas fa-info-circle"></i> Instrucciones Rápidas</h4>
+                <ol>
+                    <li>El <strong>Emisor</strong> genera un código y comparte su cámara</li>
+                    <li>El <strong>Supervisor</strong> introduce ese código para ver la transmisión</li>
+                    <li>La conexión es <strong>directa</strong> entre dispositivos (P2P)</li>
+                    <li>Comunicación de <strong>audio bidireccional</strong> disponible</li>
+                </ol>
+            </div>
+        </main>
+
+        <!-- Panel del Emisor -->
+        <div id="emitterPanel" class="panel hidden">
+            <div class="panel-header">
+                <button class="back-button" id="backFromEmitter">
+                    <i class="fas fa-arrow-left"></i> Volver
+                </button>
+                <h2><i class="fas fa-video"></i> Panel del Emisor</h2>
+                <div class="status-badge streaming" id="emitterStatusBadge">
+                    <i class="fas fa-circle"></i> Listo
+                </div>
+            </div>
+
+            <div class="panel-content">
+                <div class="video-section">
+                    <div class="video-container">
+                        <video id="localVideo" autoplay muted playsinline></video>
+                        <div class="video-overlay">
+                            <div class="video-info">
+                                <span class="camera-status"><i class="fas fa-circle"></i> CÁMARA LOCAL</span>
+                                <span class="quality-tag" id="qualityTag">HD</span>
+                            </div>
+                        </div>
+                        <div class="video-controls">
+                            <button id="btnSwitchCamera" class="control-button" title="Cambiar cámara">
+                                <i class="fas fa-sync-alt"></i>
+                            </button>
+                            <button id="btnFlipCamera" class="control-button" title="Espejo horizontal">
+                                <i class="fas fa-exchange-alt"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="code-section">
+                    <div class="section-title">
+                        <i class="fas fa-key"></i> Código de Acceso
+                    </div>
+                    <div class="code-display">
+                        <div class="code-value" id="emitterCode">GENERANDO...</div>
+                        <div class="code-actions">
+                            <button id="btnCopyCode" class="action-button">
+                                <i class="far fa-copy"></i> Copiar
+                            </button>
+                            <button id="btnRefreshCode" class="action-button">
+                                <i class="fas fa-redo"></i> Nuevo Código
+                            </button>
+                        </div>
+                    </div>
+                    <p class="hint">
+                        <i class="fas fa-share-alt"></i> Comparte este código con quien quieras que vea tu transmisión
                     </p>
                 </div>
+
+                <div class="controls-section">
+                    <div class="section-title">
+                        <i class="fas fa-sliders-h"></i> Controles
+                    </div>
+                    <div class="control-buttons">
+                        <button id="btnStartEmitter" class="primary-button">
+                            <i class="fas fa-play"></i> Iniciar Transmisión
+                        </button>
+                        <button id="btnStopEmitter" class="danger-button hidden">
+                            <i class="fas fa-stop"></i> Detener Transmisión
+                        </button>
+                        <button id="btnAudioToggle" class="secondary-button">
+                            <i class="fas fa-microphone"></i> Micrófono: ON
+                        </button>
+                    </div>
+
+                    <div class="settings">
+                        <div class="setting">
+                            <label for="videoQuality">
+                                <i class="fas fa-hd"></i> Calidad de Video
+                            </label>
+                            <select id="videoQuality">
+                                <option value="low">Baja (480p)</option>
+                                <option value="medium" selected>Media (720p)</option>
+                                <option value="high">Alta (1080p)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="connected-clients">
+                    <div class="section-title">
+                        <i class="fas fa-users"></i> Supervisores Conectados
+                    </div>
+                    <div id="connectedClients" class="clients-list">
+                        <div class="empty-state">
+                            <i class="fas fa-user-clock"></i>
+                            <p>Esperando conexiones...</p>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
 
-        <!-- Panel Emisor -->
-        <div id="emitterPanel" class="panel hidden">
-            <button class="back-btn" id="backFromEmitter">
-                ← Volver
-            </button>
-            
-            <h2>📹 Modo Emisor</h2>
-            <p class="instructions">
-                Comparte este código con el supervisor para que pueda conectarse:
-            </p>
-            
-            <div class="code-display">
-                <div class="code" id="emitterCode">Generando...</div>
-                <p class="instructions" style="margin-top: 10px;">
-                    El código expira en 24 horas
-                </p>
-            </div>
-            
-            <video id="localVideo" autoplay muted playsinline></video>
-            
-            <div class="status" id="emitterStatus">
-                Listo para transmitir
-            </div>
-            
-            <div style="display: flex; gap: 10px; margin-top: 20px;">
-                <button class="btn btn-primary" id="btnStartEmitter" style="flex: 1;">
-                    ▶️ Iniciar Transmisión
-                </button>
-                <button class="btn" id="btnCopyCode" style="background: #6c757d; color: white;">
-                    📋 Copiar Código
-                </button>
-            </div>
-            
-            <div style="margin-top: 20px; padding: 15px; background: #e8f5e9; border-radius: 10px; border-left: 4px solid #4CAF50;">
-                <p style="color: #2e7d32; font-size: 14px; margin: 0;">
-                    <strong>Nota:</strong> Mantén esta página abierta en primer plano para transmitir continuamente
-                </p>
-            </div>
-        </div>
-
-        <!-- Panel Supervisor -->
+        <!-- Panel del Supervisor -->
         <div id="viewerPanel" class="panel hidden">
-            <button class="back-btn" id="backFromViewer">
-                ← Volver
-            </button>
-            
-            <h2>👁️ Modo Supervisor</h2>
-            <p class="instructions">
-                Introduce el código proporcionado por el emisor:
-            </p>
-            
-            <div class="connection-input">
-                <input type="text" id="peerCodeInput" placeholder="Ej: ABC123" maxlength="6" autocomplete="off">
-                <button class="btn btn-primary" id="btnConnect">
-                    Conectar
+            <div class="panel-header">
+                <button class="back-button" id="backFromViewer">
+                    <i class="fas fa-arrow-left"></i> Volver
                 </button>
+                <h2><i class="fas fa-eye"></i> Panel del Supervisor</h2>
+                <div class="status-badge disconnected" id="viewerStatusBadge">
+                    <i class="fas fa-circle"></i> Desconectado
+                </div>
             </div>
-            
-            <video id="remoteVideo" autoplay playsinline></video>
-            
-            <div class="status status-connecting" id="viewerStatus">
-                Esperando conexión...
+
+            <div class="panel-content">
+                <div class="connection-section">
+                    <div class="section-title">
+                        <i class="fas fa-link"></i> Conectar a Emisor
+                    </div>
+                    <div class="connection-input">
+                        <div class="input-group">
+                            <div class="input-icon">
+                                <i class="fas fa-key"></i>
+                            </div>
+                            <input type="text" 
+                                   id="peerCodeInput" 
+                                   placeholder="Ingresa el código del emisor (ej: A1B2C3)"
+                                   autocomplete="off"
+                                   maxlength="6">
+                            <button id="btnConnect" class="connect-button">
+                                <i class="fas fa-plug"></i> Conectar
+                            </button>
+                        </div>
+                        <div class="recent-codes" id="recentCodes">
+                            <!-- Códigos recientes aparecerán aquí -->
+                        </div>
+                    </div>
+                </div>
+
+                <div class="video-section">
+                    <div class="video-container">
+                        <video id="remoteVideo" autoplay playsinline></video>
+                        <div class="video-overlay" id="connectionOverlay">
+                            <div class="connection-prompt">
+                                <i class="fas fa-satellite"></i>
+                                <h3>ESPERANDO CONEXIÓN</h3>
+                                <p>Introduce un código para ver la transmisión en vivo</p>
+                            </div>
+                        </div>
+                        <div class="video-controls">
+                            <button id="btnFullscreen" class="control-button" title="Pantalla completa">
+                                <i class="fas fa-expand"></i>
+                            </button>
+                            <button id="btnTakeSnapshot" class="control-button" title="Capturar pantalla">
+                                <i class="fas fa-camera"></i>
+                            </button>
+                            <button id="btnMuteAudio" class="control-button" title="Silenciar audio">
+                                <i class="fas fa-volume-up"></i>
+                            </button>
+                        </div>
+                        <div class="video-stats">
+                            <div class="stat">
+                                <i class="fas fa-signal"></i>
+                                <span id="connectionStats">--</span>
+                            </div>
+                            <div class="stat">
+                                <i class="fas fa-clock"></i>
+                                <span id="uptime">00:00</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="communication-section">
+                    <div class="section-title">
+                        <i class="fas fa-microphone"></i> Comunicación
+                    </div>
+                    <div class="communication-controls">
+                        <button id="btnStartAudio" class="audio-button disabled">
+                            <i class="fas fa-microphone-slash"></i>
+                            <span>Activar Micrófono</span>
+                            <div class="pulse-indicator"></div>
+                        </button>
+                        <button id="btnStopAudio" class="audio-button danger hidden">
+                            <i class="fas fa-microphone"></i>
+                            <span>Desactivar Micrófono</span>
+                        </button>
+                        <button id="btnTestAudio" class="test-button">
+                            <i class="fas fa-volume-up"></i> Probar Audio
+                        </button>
+                    </div>
+                    <div class="volume-control">
+                        <label><i class="fas fa-volume-up"></i> Volumen</label>
+                        <input type="range" id="remoteVolume" min="0" max="100" value="80">
+                    </div>
+                </div>
+
+                <div class="connection-status">
+                    <div class="section-title">
+                        <i class="fas fa-info-circle"></i> Estado de Conexión
+                    </div>
+                    <div id="connectionDetails" class="status-details">
+                        <div class="detail">
+                            <span class="label">Estado:</span>
+                            <span class="value" id="connectionState">Desconectado</span>
+                        </div>
+                        <div class="detail">
+                            <span class="label">Latencia:</span>
+                            <span class="value" id="latencyValue">-- ms</span>
+                        </div>
+                        <div class="detail">
+                            <span class="label">Protocolo:</span>
+                            <span class="value">WebRTC P2P</span>
+                        </div>
+                    </div>
+                </div>
             </div>
-            
-            <div style="display: flex; gap: 10px; margin-top: 20px;">
-                <button class="btn btn-primary" id="btnStartAudio" style="flex: 1;" disabled>
-                    🎤 Hablar con Emisor
-                </button>
-                <button class="btn" id="btnToggleFullscreen" style="background: #6c757d; color: white;">
-                    🔍 Pantalla Completa
-                </button>
+        </div>
+    </div>
+
+    <!-- Notificaciones -->
+    <div id="notificationContainer"></div>
+
+    <!-- Modal de Error -->
+    <div id="errorModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-exclamation-triangle"></i> Error de Conexión</h3>
+                <button class="modal-close">&times;</button>
             </div>
-            
-            <div style="margin-top: 20px; padding: 15px; background: #e3f2fd; border-radius: 10px; border-left: 4px solid #2196F3;">
-                <p style="color: #1565c0; font-size: 14px; margin: 0;">
-                    <strong>Consejo:</strong> El emisor puede escucharte cuando actives el micrófono
-                </p>
+            <div class="modal-body">
+                <p id="errorMessage">No se pudo establecer la conexión. Verifica el código e intenta nuevamente.</p>
+                <div class="modal-actions">
+                    <button id="btnRetry" class="primary-button">Reintentar</button>
+                    <button class="secondary-button close-modal">Cerrar</button>
+                </div>
             </div>
         </div>
     </div>
