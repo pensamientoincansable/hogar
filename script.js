@@ -1,6 +1,6 @@
 class RemoteVisionApp {
     constructor() {
-        // Configuración mejorada
+        // Configuración mejorada con servidores STUN públicos actualizados
         this.config = {
             peerServer: {
                 host: '0.peerjs.com',
@@ -11,12 +11,9 @@ class RemoteVisionApp {
                 config: {
                     'iceServers': [
                         { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:global.stun.twilio.com:3478' },
-                        { 
-                            urls: 'turn:numb.viagenie.ca',
-                            credential: 'muazkh',
-                            username: 'webrtc@live.com'
-                        }
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun2.l.google.com:19302' },
+                        { urls: 'stun:global.stun.twilio.com:3478' }
                     ]
                 }
             },
@@ -67,16 +64,13 @@ class RemoteVisionApp {
 
         // Elementos del DOM
         this.elements = {
-            // Pantallas
             modeSelection: document.getElementById('modeSelection'),
             emitterPanel: document.getElementById('emitterPanel'),
             viewerPanel: document.getElementById('viewerPanel'),
             
-            // Modo selección
             btnEmitter: document.getElementById('btnEmitter'),
             btnViewer: document.getElementById('btnViewer'),
             
-            // Panel Emisor
             backFromEmitter: document.getElementById('backFromEmitter'),
             localVideo: document.getElementById('localVideo'),
             emitterCode: document.getElementById('emitterCode'),
@@ -92,7 +86,6 @@ class RemoteVisionApp {
             connectedClients: document.getElementById('connectedClients'),
             qualityTag: document.getElementById('qualityTag'),
             
-            // Panel Supervisor
             backFromViewer: document.getElementById('backFromViewer'),
             peerCodeInput: document.getElementById('peerCodeInput'),
             btnConnect: document.getElementById('btnConnect'),
@@ -113,10 +106,8 @@ class RemoteVisionApp {
             recentCodes: document.getElementById('recentCodes'),
             connectionDetails: document.getElementById('connectionDetails'),
             
-            // Estado global
             connectionStatus: document.getElementById('connectionStatus'),
             
-            // Notificaciones y modal
             notificationContainer: document.getElementById('notificationContainer'),
             errorModal: document.getElementById('errorModal'),
             errorMessage: document.getElementById('errorMessage'),
@@ -132,15 +123,11 @@ class RemoteVisionApp {
         console.log('🚀 Inicializando Visión Remota...');
         
         this.updateConnectionStatus('🟢 Selecciona un modo');
-        
         this.setupEventListeners();
-        
         this.generateDisplayCode();
-        
         this.loadRecentCodes();
         
         this.elements.videoQuality.value = this.state.settings.videoQuality;
-        
         this.showNotification('Sistema inicializado correctamente', 'success');
     }
 
@@ -197,7 +184,6 @@ class RemoteVisionApp {
                     this.handleIncomingCall(call);
                 });
                 
-                // Timeout para inicialización
                 const initTimeout = setTimeout(() => {
                     if (!this.state.peerId) {
                         reject('Timeout al conectar con el servidor PeerJS');
@@ -214,15 +200,12 @@ class RemoteVisionApp {
     }
 
     setupEventListeners() {
-        // Modo selección
         this.elements.btnEmitter.addEventListener('click', () => this.setEmitterMode());
         this.elements.btnViewer.addEventListener('click', () => this.setViewerMode());
         
-        // Navegación
         this.elements.backFromEmitter.addEventListener('click', () => this.showModeSelection());
         this.elements.backFromViewer.addEventListener('click', () => this.showModeSelection());
         
-        // Panel Emisor
         this.elements.btnStartEmitter.addEventListener('click', () => this.toggleEmitterStream());
         this.elements.btnStopEmitter.addEventListener('click', () => this.stopEmitter());
         this.elements.btnCopyCode.addEventListener('click', () => this.copyCode());
@@ -232,7 +215,6 @@ class RemoteVisionApp {
         this.elements.btnAudioToggle.addEventListener('click', () => this.toggleEmitterAudio());
         this.elements.videoQuality.addEventListener('change', (e) => this.changeVideoQuality(e.target.value));
         
-        // Panel Supervisor
         this.elements.btnConnect.addEventListener('click', () => this.connectToEmitter());
         this.elements.peerCodeInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') this.connectToEmitter();
@@ -245,7 +227,6 @@ class RemoteVisionApp {
         this.elements.btnTestAudio.addEventListener('click', () => this.testAudio());
         this.elements.remoteVolume.addEventListener('input', (e) => this.changeRemoteVolume(e.target.value));
         
-        // Modal de error
         this.elements.btnRetry.addEventListener('click', () => this.retryConnection());
         this.elements.modalClose.addEventListener('click', () => this.hideErrorModal());
         this.elements.closeModal.addEventListener('click', () => this.hideErrorModal());
@@ -331,7 +312,6 @@ class RemoteVisionApp {
         try {
             this.showNotification('Activando modo supervisor...', 'info');
             
-            // Generar ID único para el supervisor
             const viewerId = 'viewer-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
             await this.initializePeerJS(viewerId);
             
@@ -364,7 +344,6 @@ class RemoteVisionApp {
             this.peer = null;
         }
         
-        // Limpiar todos los timeouts
         this.clearAllTimeouts();
         
         this.state.isEmitter = false;
@@ -395,10 +374,8 @@ class RemoteVisionApp {
         try {
             this.showNotification('Iniciando transmisión...', 'info');
             
-            // Obtener lista de dispositivos primero
             await this.getMediaDevices();
             
-            // Configurar cámara frontal por defecto
             const facingMode = this.state.isFrontCamera ? 'user' : 'environment';
             
             const constraints = {
@@ -420,30 +397,24 @@ class RemoteVisionApp {
             this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
             console.log('Stream obtenido exitosamente:', this.localStream);
             
-            // Mostrar video local
             this.elements.localVideo.srcObject = this.localStream;
-            this.elements.localVideo.muted = true; // Silenciar audio local para evitar eco
+            this.elements.localVideo.muted = true;
             
-            // Intentar reproducir automáticamente
             await this.elements.localVideo.play().catch(e => {
                 console.log('Video local autoplay bloqueado:', e);
             });
             
-            // Actualizar UI
             this.elements.btnStartEmitter.classList.add('hidden');
             this.elements.btnStopEmitter.classList.remove('hidden');
             this.state.isStreaming = true;
             
-            // Actualizar estado
             this.updateEmitterStatus('Transmitiendo en vivo', 'streaming');
             this.updateQualityTag();
             
-            // Habilitar controles
             this.elements.btnAudioToggle.disabled = false;
             
             this.showNotification('Transmisión iniciada correctamente', 'success');
             
-            // Notificar a viewers conectados
             if (this.state.connectedViewers.size > 0) {
                 this.showNotification(`${this.state.connectedViewers.size} supervisor(es) conectado(s)`, 'info');
             }
@@ -462,7 +433,6 @@ class RemoteVisionApp {
             this.elements.localVideo.srcObject = null;
         }
         
-        // Cerrar conexiones activas
         if (this.currentCall) {
             this.currentCall.close();
             this.currentCall = null;
@@ -473,18 +443,15 @@ class RemoteVisionApp {
             this.dataConnection = null;
         }
         
-        // Limpiar audio del supervisor si existe
         if (this.supervisorAudioElement) {
             this.supervisorAudioElement.remove();
             this.supervisorAudioElement = null;
         }
         
-        // Actualizar UI
         this.elements.btnStartEmitter.classList.remove('hidden');
         this.elements.btnStopEmitter.classList.add('hidden');
         this.state.isStreaming = false;
         
-        // Limpiar lista de viewers
         this.state.connectedViewers.clear();
         this.updateConnectedClients();
         
@@ -496,7 +463,6 @@ class RemoteVisionApp {
         if (!this.localStream) return;
         
         try {
-            // Obtener dispositivos disponibles
             await this.getMediaDevices();
             
             if (this.mediaDevices.length < 2) {
@@ -504,14 +470,11 @@ class RemoteVisionApp {
                 return;
             }
             
-            // Cambiar entre frontal/trasera
             this.state.isFrontCamera = !this.state.isFrontCamera;
             
-            // Detener track actual
             const currentTrack = this.localStream.getVideoTracks()[0];
             currentTrack.stop();
             
-            // Encontrar nueva cámara
             const facingMode = this.state.isFrontCamera ? 'user' : 'environment';
             const device = this.mediaDevices.find(d => 
                 d.label.toLowerCase().includes(facingMode === 'user' ? 'front' : 'back') ||
@@ -520,7 +483,6 @@ class RemoteVisionApp {
             
             this.currentDeviceId = device.deviceId;
             
-            // Obtener nuevo stream
             const newStream = await navigator.mediaDevices.getUserMedia({
                 video: {
                     ...this.config.videoQuality[this.state.settings.videoQuality],
@@ -534,14 +496,11 @@ class RemoteVisionApp {
                 }
             });
             
-            // Reemplazar track de video
             const newVideoTrack = newStream.getVideoTracks()[0];
-            const audioTrack = this.localStream.getAudioTracks()[0];
             
             this.localStream.removeTrack(currentTrack);
             this.localStream.addTrack(newVideoTrack);
             
-            // Actualizar conexiones activas
             if (this.currentCall) {
                 const sender = this.currentCall.peerConnection.getSenders()
                     .find(s => s.track && s.track.kind === 'video');
@@ -570,7 +529,6 @@ class RemoteVisionApp {
             this.mediaDevices = devices.filter(device => device.kind === 'videoinput');
             
             if (this.mediaDevices.length > 0 && !this.currentDeviceId) {
-                // Seleccionar cámara frontal por defecto
                 const frontCamera = this.mediaDevices.find(device => 
                     device.label.toLowerCase().includes('front') ||
                     device.label.toLowerCase().includes('user') ||
@@ -627,7 +585,6 @@ class RemoteVisionApp {
             return;
         }
         
-        // Guardar código reciente
         this.saveRecentCode(code);
         
         this.state.hostPeerId = code;
@@ -636,23 +593,18 @@ class RemoteVisionApp {
         this.updateViewerStatus('Conectando...', 'connecting');
         this.showNotification(`Conectando a ${code}...`, 'info');
         
-        // Intentar conectar
         await this.attemptConnection(code);
     }
 
     async attemptConnection(code) {
         try {
-            // Limpiar timeouts anteriores
             this.clearAllTimeouts();
             
             if (!this.peer || this.peer.disconnected) {
                 throw new Error('No conectado al servidor PeerJS');
             }
             
-            // Primero intentamos conexión de datos con timeout
             await this.attemptDataConnection(code);
-            
-            // Ahora intentamos la llamada de video
             await this.attemptVideoCall(code);
             
         } catch (error) {
@@ -706,21 +658,78 @@ class RemoteVisionApp {
         });
     }
 
+    // Pista de vídeo vacía para forzar la declaración 'm=video' en el SDP
+    createBlankVideoTrack() {
+        const canvas = document.createElement('canvas');
+        canvas.width = 10;
+        canvas.height = 10;
+        const ctx = canvas.getContext('2d');
+        ctx.fillRect(0, 0, 10, 10);
+        const stream = canvas.captureStream(1);
+        const track = stream.getVideoTracks()[0];
+        track.enabled = false;
+        return track;
+    }
+
+    async createLocalAudioStream() {
+        try {
+            this.localAudioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            this.localAudioStream.getAudioTracks().forEach(track => {
+                track.enabled = false;
+            });
+            console.log('✅ Stream de audio local creado (micrófono real, silenciado)');
+        } catch (err) {
+            console.warn('No se pudo obtener permiso de micrófono. Creando stream de audio silencioso...', err);
+            
+            try {
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = audioContext.createOscillator();
+                const gainNode = audioContext.createGain();
+                
+                gainNode.gain.value = 0;
+                oscillator.connect(gainNode);
+                
+                const destination = audioContext.createMediaStreamDestination();
+                gainNode.connect(destination);
+                
+                oscillator.start();
+                this.localAudioStream = destination.stream;
+                
+                setTimeout(() => {
+                    oscillator.stop();
+                }, 100);
+                
+                console.log('✅ Stream de audio local creado (audio silencioso sintético)');
+            } catch (audioError) {
+                console.error('Error crítico: No se pudo crear ningún stream de audio', audioError);
+                throw new Error('Se necesita acceso al micrófono o compatibilidad con AudioContext para iniciar la llamada');
+            }
+        }
+
+        // Se adjunta el track de video neutro al stream de oferta
+        if (this.localAudioStream) {
+            this.localAudioStream.addTrack(this.createBlankVideoTrack());
+        }
+    }
+
     async attemptVideoCall(code) {
         return new Promise(async (resolve, reject) => {
             try {
-                // Timeout para la llamada de video
                 const callTimeout = setTimeout(() => {
                     reject(new Error('Timeout esperando stream del emisor (20 segundos)'));
                 }, 20000);
                 
                 this.connectionTimeouts.push(callTimeout);
                 
-                // Crear un stream de audio para la llamada
                 await this.createLocalAudioStream();
                 
-                // Ahora llamamos CON el stream local, como exige PeerJS
-                const call = this.peer.call(code, this.localAudioStream);
+                // Se envía la llamada con las opciones de oferta SDP para habilitar recepción de video y audio
+                const call = this.peer.call(code, this.localAudioStream, {
+                    offerOptions: {
+                        offerToReceiveVideo: true,
+                        offerToReceiveAudio: true
+                    }
+                });
                 
                 if (!call) {
                     clearTimeout(callTimeout);
@@ -758,59 +767,16 @@ class RemoteVisionApp {
         });
     }
 
-    async createLocalAudioStream() {
-        // Intenta obtener un stream de micrófono real pero silenciado
-        try {
-            this.localAudioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            this.localAudioStream.getAudioTracks().forEach(track => {
-                track.enabled = false; // Silenciado por defecto
-            });
-            console.log('✅ Stream de audio local creado (micrófono real, silenciado)');
-        } catch (err) {
-            console.warn('No se pudo obtener permiso de micrófono. Creando stream de audio silencioso...', err);
-            
-            // Fallback: Crea un stream de audio silencioso con AudioContext
-            try {
-                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                const oscillator = audioContext.createOscillator();
-                const gainNode = audioContext.createGain();
-                
-                // Configurar oscilador silencioso
-                gainNode.gain.value = 0; // Volumen en 0 = silencioso
-                oscillator.connect(gainNode);
-                
-                const destination = audioContext.createMediaStreamDestination();
-                gainNode.connect(destination);
-                
-                oscillator.start();
-                this.localAudioStream = destination.stream;
-                
-                // Detenemos el oscilador, el stream sigue siendo válido
-                setTimeout(() => {
-                    oscillator.stop();
-                }, 100);
-                
-                console.log('✅ Stream de audio local creado (audio silencioso sintético)');
-            } catch (audioError) {
-                console.error('Error crítico: No se pudo crear ningún stream de audio', audioError);
-                throw new Error('Se necesita acceso al micrófono o compatibilidad con AudioContext para iniciar la llamada');
-            }
-        }
-    }
-
     handleRemoteStream(stream) {
         this.remoteStream = stream;
         this.elements.remoteVideo.srcObject = stream;
         this.elements.connectionOverlay.classList.add('hidden');
         
-        // Configurar eventos del video para móviles
         this.setupVideoForMobile();
         
-        // Asegurarse de que el video no esté silenciado por defecto
         this.elements.remoteVideo.muted = false;
         this.elements.remoteVideo.volume = this.elements.remoteVolume.value / 100;
         
-        // Verificar que el stream tenga video y audio
         const videoTracks = stream.getVideoTracks();
         const audioTracks = stream.getAudioTracks();
         
@@ -823,7 +789,6 @@ class RemoteVisionApp {
         if (audioTracks.length === 0) {
             this.showNotification('Advertencia: No se detectó audio en la transmisión', 'warning');
         } else {
-            // Configurar audio del emisor
             audioTracks[0].enabled = true;
         }
         
@@ -831,31 +796,23 @@ class RemoteVisionApp {
         this.updateViewerStatus('Conectado', 'streaming');
         this.updateConnectionState('Conectado');
         
-        // Habilitar controles
         this.elements.btnStartAudio.classList.remove('disabled');
         this.elements.btnStartAudio.disabled = false;
         
-        // Iniciar temporizador de conexión
         this.startUptimeTimer();
-        
-        // Iniciar monitoreo de conexión
         this.startConnectionStatsMonitoring();
         
         this.showNotification('¡Conectado a la transmisión!', 'success');
-        
-        // Actualizar estadísticas periódicamente
         this.updateConnectionStats();
     }
 
     setupVideoForMobile() {
         const video = this.elements.remoteVideo;
         
-        // Para iOS, necesitamos playsinline para que el video se reproduzca en la página
         video.setAttribute('playsinline', 'true');
         video.setAttribute('webkit-playsinline', 'true');
         video.setAttribute('muted', 'false');
         
-        // Configurar eventos de reproducción
         video.onloadedmetadata = () => {
             console.log('Metadata del video cargado');
             video.play().catch(error => {
@@ -870,7 +827,6 @@ class RemoteVisionApp {
                         console.log('Error al reproducir video:', err);
                     });
                     
-                    // Remover listeners después de usarlos
                     document.removeEventListener('click', playOnInteraction);
                     document.removeEventListener('touchstart', playOnInteraction);
                 };
@@ -935,7 +891,6 @@ class RemoteVisionApp {
                     break;
                     
                 case 'ping':
-                    // Responder al ping para medir latencia
                     if (this.dataConnection) {
                         this.dataConnection.send(JSON.stringify({
                             type: 'pong',
@@ -946,7 +901,6 @@ class RemoteVisionApp {
                     break;
                     
                 case 'pong':
-                    // Calcular latencia
                     const latency = Date.now() - message.timestamp;
                     this.elements.latencyValue.textContent = `${latency} ms`;
                     break;
@@ -958,13 +912,11 @@ class RemoteVisionApp {
 
     handleIncomingCall(call) {
         if (this.state.isEmitter && this.localStream) {
-            // El emisor responde con su stream local (video y audio)
             call.answer(this.localStream);
             this.currentCall = call;
             
             console.log('✅ Aceptada llamada de:', call.peer);
             
-            // Notificar al emisor sobre el nuevo viewer
             if (this.dataConnection) {
                 this.dataConnection.send(JSON.stringify({
                     type: 'viewer-connected',
@@ -972,15 +924,12 @@ class RemoteVisionApp {
                 }));
             }
             
-            // Agregar viewer a la lista
             this.state.connectedViewers.add(call.peer);
             this.updateConnectedClients();
             
-            // Escuchar el audio del supervisor cuando active su micrófono
             call.on('stream', (supervisorStream) => {
                 console.log('Audio recibido del supervisor:', call.peer);
                 
-                // Crear un elemento de audio oculto para reproducir el audio del supervisor
                 if (!this.supervisorAudioElement) {
                     this.supervisorAudioElement = document.createElement('audio');
                     this.supervisorAudioElement.autoplay = true;
@@ -989,10 +938,7 @@ class RemoteVisionApp {
                     document.body.appendChild(this.supervisorAudioElement);
                 }
                 
-                // Asignar el stream al elemento de audio
                 this.supervisorAudioElement.srcObject = supervisorStream;
-                
-                // Configurar para reproducción automática
                 this.supervisorAudioElement.play().catch(e => {
                     console.log('Audio del supervisor autoplay bloqueado:', e);
                 });
@@ -1011,7 +957,6 @@ class RemoteVisionApp {
                 this.state.connectedViewers.delete(call.peer);
                 this.updateConnectedClients();
                 
-                // Limpiar audio del supervisor
                 if (this.supervisorAudioElement) {
                     this.supervisorAudioElement.remove();
                     this.supervisorAudioElement = null;
@@ -1024,7 +969,6 @@ class RemoteVisionApp {
                 this.updateConnectedClients();
             });
         } else if (this.state.isEmitter && !this.localStream) {
-            // El emisor no está transmitiendo, rechazar la llamada
             console.log('Emisor no está transmitiendo, rechazando llamada');
             call.close();
         }
@@ -1032,7 +976,6 @@ class RemoteVisionApp {
 
     async startViewerAudio() {
         try {
-            // Obtener un nuevo stream de micrófono REAL y activado
             const newAudioStream = await navigator.mediaDevices.getUserMedia({
                 audio: {
                     echoCancellation: true,
@@ -1044,12 +987,10 @@ class RemoteVisionApp {
                 video: false
             });
             
-            // Detener el track de audio antiguo (el silencioso)
             if (this.localAudioStream) {
-                this.localAudioStream.getTracks().forEach(track => track.stop());
+                this.localAudioStream.getAudioTracks().forEach(track => track.stop());
             }
             
-            // Reemplazar el stream local con el nuevo
             this.localAudioStream = newAudioStream;
             
             if (this.currentCall) {
@@ -1058,10 +999,8 @@ class RemoteVisionApp {
                 const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
                 
                 if (audioSender) {
-                    // Reemplazar el track de audio existente en la conexión WebRTC
                     audioSender.replaceTrack(newAudioTrack);
                 } else {
-                    // Esto no debería pasar, pero por si acaso se agrega
                     this.currentCall.peerConnection.addTrack(newAudioTrack, newAudioStream);
                 }
                 
@@ -1086,8 +1025,6 @@ class RemoteVisionApp {
             const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
             
             if (audioSender && audioSender.track) {
-                // No detenemos el track aquí, solo lo reemplazamos por null
-                // Esto detiene el envío pero mantiene la capacidad de reanudar
                 audioSender.replaceTrack(null);
             }
             
@@ -1174,7 +1111,6 @@ class RemoteVisionApp {
         const ctx = canvas.getContext('2d');
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         
-        // Crear enlace de descarga
         const link = document.createElement('a');
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         link.download = `captura-${timestamp}.png`;
@@ -1199,7 +1135,6 @@ class RemoteVisionApp {
     }
 
     disconnectFromEmitter() {
-        // Limpiar timeouts
         this.clearAllTimeouts();
         
         if (this.currentCall) {
@@ -1236,7 +1171,6 @@ class RemoteVisionApp {
         this.updateViewerStatus('Desconectado', 'disconnected');
         this.updateConnectionState('Desconectado');
         
-        // Detener temporizador
         this.stopUptimeTimer();
         this.stopConnectionStatsMonitoring();
         
@@ -1352,7 +1286,6 @@ class RemoteVisionApp {
     updateConnectionStats() {
         if (!this.state.isConnected) return;
         
-        // Enviar ping para medir latencia
         if (this.dataConnection) {
             this.dataConnection.send(JSON.stringify({
                 type: 'ping',
@@ -1360,7 +1293,6 @@ class RemoteVisionApp {
             }));
         }
         
-        // Actualizar estadísticas de conexión
         if (this.state.isAudioEnabled) {
             this.elements.connectionStats.textContent = 'Audio bidireccional activo';
         } else {
@@ -1405,7 +1337,6 @@ class RemoteVisionApp {
     }
 
     clearAllTimeouts() {
-        // Limpiar todos los timeouts almacenados
         this.connectionTimeouts.forEach(timeout => {
             clearTimeout(timeout);
         });
@@ -1465,16 +1396,13 @@ class RemoteVisionApp {
 
 // Inicializar aplicación
 document.addEventListener('DOMContentLoaded', () => {
-    // Verificar compatibilidad
     if (!navigator.mediaDevices || !window.Peer) {
         alert('Tu navegador no es compatible. Por favor, usa Chrome, Firefox o Edge actualizado.');
         return;
     }
     
-    // Inicializar
     window.app = new RemoteVisionApp();
     
-    // Manejar conexión por parámetro de URL
     const urlParams = new URLSearchParams(window.location.search);
     const connectTo = urlParams.get('connect');
     if (connectTo) {
