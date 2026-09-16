@@ -14,6 +14,54 @@
 4. Haz clic en "Conectar"
 5. Usa los controles para comunicarte
 
+## 🎯 Detección de Movimiento
+
+La aplicación analiza **localmente** los fotogramas del vídeo (tanto en el emisor como en
+el supervisor) y dispara **alarmas configurables** al detectar movimiento.
+
+El análisis es de **sólo lectura**: nunca modifica la cámara, el micrófono, el MediaStream
+ni la conexión WebRTC. Usa un lienzo diminuto (160×120 px) y pocos análisis por segundo,
+por lo que no afecta a la calidad ni a la estabilidad de la transmisión. Si algo falla,
+la detección se detiene sola y la transmisión continúa con normalidad.
+
+### Cómo usarla
+
+1. Abre el panel del emisor o del supervisor y activa el interruptor **Detección de Movimiento**
+2. Ajusta **sensibilidad**, **velocidad de análisis** (1-10 por segundo), **silencio entre
+   alarmas** (5-120 s) y **volumen**
+3. Marca los **tipos de alarma** que quieras usar
+4. Pulsa **Probar alarma** para escuchar cómo suena antes de dejarla activa
+
+El medidor muestra cuánto cambia la imagen en tiempo real y dónde está el umbral de disparo;
+cuando lo supera durante varios fotogramas seguidos, se dispara la alarma (con enfriamiento
+para no repetirla en ráfaga).
+
+### Tipos de alarma
+
+| Alarma | Qué hace |
+| --- | --- |
+| 🚨 **Sirena** | Barrido sonoro continuo generado con WebAudio (no necesita archivos) |
+| 🔔 **Timbre** | Tres pitidos cortos |
+| 🗣️ **Voz** | Mensaje hablado: "Movimiento detectado" |
+| 📳 **Vibración** | Vibra el dispositivo (móviles) |
+| ⚡ **Alerta visual** | Banner rojo y parpadeo a pantalla completa + distintivo sobre el vídeo |
+| 📧 **Notificación** | Notificación del sistema (pide permiso la primera vez) |
+| 📡 **Avisar al otro dispositivo** | Envía el aviso por el canal de datos (emisor ↔ supervisor) |
+| ↩️ **Reaccionar a avisos remotos** | Dispara tus alarmas cuando avisa el otro dispositivo |
+
+### Otras opciones
+
+- **Sirena continua**: mantiene la sirena hasta pulsar "Detener alarma" (máximo 30 s)
+- **Registro de eventos**: guarda hora, nivel de movimiento y captura de cada evento;
+  pulsa la miniatura para descargar la evidencia
+- **Analizar con la pestaña oculta**: sigue analizando en segundo plano (consume más batería;
+  el navegador puede ralentizarlo)
+- **Sin bucles**: un aviso remoto nunca se reenvía, así que dos dispositivos avisándose
+  no se alarman mutuamente en cadena
+
+Cada dispositivo guarda sus propias preferencias (activación, sensibilidad, alarmas…) de
+forma independiente, por lo que emisor y supervisor pueden tener configuraciones distintas.
+
 ## ⚙️ Solución de Problemas
 
 ### Error "No se pudo conectar":
@@ -48,6 +96,8 @@
 - **Códigos temporales**: Cada código es único y temporal
 - **Permisos necesarios**: Solo se accede a cámara/micrófono con tu permiso
 - **Sin grabación**: No se almacenan las transmisiones
+- **Análisis local**: La detección de movimiento se ejecuta en tu dispositivo; las capturas
+  de evidencia viven sólo en la memoria de la pestaña (no se suben a ningún servidor)
 
 ## 🆘 Soporte
 
@@ -57,13 +107,29 @@ Si encuentras problemas:
 3. **Verifica permisos** del navegador
 4. **Prueba en modo incógnito** (sin extensiones)
 
+## 🧪 Pruebas
+
+```bash
+npm install   # sólo para desarrollo (jsdom)
+npm test
+```
+
+La suite incluye 26 pruebas: el motor de detección (diferencia de fotogramas, sensibilidad,
+enfriamiento, fallos de lectura) y pruebas de integración que cargan la aplicación completa
+en jsdom y verifican que
+
+- la transmisión (getUserMedia → `<video>` → pistas) sigue intacta al activar la detección,
+- el emisor detecta movimiento, guarda evidencia, alarma y avisa al supervisor,
+- el supervisor analiza el vídeo recibido sin tocar el elemento `<video>`,
+- los avisos remotos no se reenvían (sin bucles entre dispositivos).
+
 ## 🚀 Mejoras Futuras
 
 Posibles mejoras a implementar:
 - [ ] Grabación local de transmisiones
 - [ ] Chat de texto integrado
 - [ ] Modo noche (infrarrojo simulado)
-- [ ] Detección de movimiento
+- [x] Detección de movimiento (con alarmas configurables y aviso entre dispositivos)
 - [ ] Notificaciones push
 
 ---

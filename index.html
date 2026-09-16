@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+    <script src="motion.js"></script>
 </head>
 <body>
     <!-- Fondo futurista -->
@@ -105,6 +106,9 @@
                 <div class="video-section">
                     <div class="video-container">
                         <video id="localVideo" autoplay muted playsinline></video>
+                        <div class="motion-badge hidden" id="emitterMotionBadge">
+                            <i class="fas fa-circle"></i><span>Sin movimiento</span>
+                        </div>
                         <div class="video-overlay">
                             <div class="video-info">
                                 <span class="camera-status"><i class="fas fa-circle"></i> CÁMARA LOCAL</span>
@@ -120,6 +124,111 @@
                             </button>
                         </div>
                     </div>
+                </div>
+
+                <!-- Detección de movimiento -->
+                <div class="motion-section" id="emitterMotionSection">
+                    <div class="section-title motion-title">
+                        <span><i class="fas fa-person-running"></i> Detección de Movimiento</span>
+                        <label class="switch" title="Activar detección de movimiento">
+                            <input type="checkbox" id="emitterMotionToggle">
+                            <span class="switch-slider"></span>
+                        </label>
+                    </div>
+
+                    <div class="motion-status">
+                        <div class="motion-state" id="emitterMotionState">
+                            <i class="fas fa-power-off" id="emitterMotionStateIcon"></i>
+                            <span id="emitterMotionStateText">Inactiva</span>
+                        </div>
+
+                        <div class="motion-meter">
+                            <div class="motion-meter-head">
+                                <span>Nivel de movimiento</span>
+                                <span id="emitterMotionLevel">0.0%</span>
+                            </div>
+                            <div class="motion-meter-track">
+                                <div class="motion-meter-fill" id="emitterMotionBar"></div>
+                                <div class="motion-meter-mark" title="Umbral de disparo"></div>
+                            </div>
+                            <div class="motion-meter-foot" id="emitterMotionThreshold">Umbral de disparo: --</div>
+                        </div>
+
+                        <div class="motion-counters">
+                            <div class="motion-counter">
+                                <strong id="emitterMotionCount">0</strong>
+                                <small>Eventos</small>
+                            </div>
+                            <div class="motion-counter">
+                                <strong id="emitterLastMotion">--:--:--</strong>
+                                <small>Último</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="motion-settings">
+                        <div class="setting">
+                            <label for="emitterMotionSensitivity">
+                                <i class="fas fa-gauge-high"></i> Sensibilidad: <span id="emitterMotionSensitivityValue">Media</span>
+                            </label>
+                            <input type="range" id="emitterMotionSensitivity" min="1" max="10" step="1" value="6">
+                        </div>
+                        <div class="setting">
+                            <label for="emitterMotionRate">
+                                <i class="fas fa-stopwatch"></i> Análisis: <span id="emitterMotionRateValue">3/s</span>
+                            </label>
+                            <input type="range" id="emitterMotionRate" min="1" max="10" step="1" value="3">
+                        </div>
+                        <div class="setting">
+                            <label for="emitterMotionCooldown">
+                                <i class="fas fa-hourglass-half"></i> Silencio entre alarmas: <span id="emitterMotionCooldownValue">15s</span>
+                            </label>
+                            <input type="range" id="emitterMotionCooldown" min="5" max="120" step="5" value="15">
+                        </div>
+                        <div class="setting">
+                            <label for="emitterMotionVolume">
+                                <i class="fas fa-volume-high"></i> Volumen de alarma: <span id="emitterMotionVolumeValue">75%</span>
+                            </label>
+                            <input type="range" id="emitterMotionVolume" min="0" max="100" step="5" value="75">
+                        </div>
+                    </div>
+
+                    <div class="alarm-types">
+                        <div class="alarm-types-title"><i class="fas fa-bell"></i> Tipos de alarma</div>
+                        <div class="alarm-grid">
+                            <label class="alarm-option"><input type="checkbox" data-alarm="siren"><span><i class="fas fa-tower-broadcast"></i> Sirena</span></label>
+                            <label class="alarm-option"><input type="checkbox" data-alarm="beep"><span><i class="fas fa-bell"></i> Timbre</span></label>
+                            <label class="alarm-option"><input type="checkbox" data-alarm="voice"><span><i class="fas fa-comment-dots"></i> Voz</span></label>
+                            <label class="alarm-option"><input type="checkbox" data-alarm="vibrate"><span><i class="fas fa-mobile-screen-button"></i> Vibración</span></label>
+                            <label class="alarm-option"><input type="checkbox" data-alarm="flash"><span><i class="fas fa-bolt"></i> Alerta visual</span></label>
+                            <label class="alarm-option"><input type="checkbox" data-alarm="notify"><span><i class="fas fa-envelope-open-text"></i> Notificación</span></label>
+                            <label class="alarm-option wide"><input type="checkbox" data-alarm="remote"><span><i class="fas fa-satellite-dish"></i> Avisar a los supervisores</span></label>
+                            <label class="alarm-option wide"><input type="checkbox" data-alarm="remote-react"><span><i class="fas fa-reply"></i> Reaccionar a avisos del supervisor</span></label>
+                        </div>
+                        <div class="alarm-grid extras">
+                            <label class="alarm-option"><input type="checkbox" id="emitterMotionContinuous"><span><i class="fas fa-repeat"></i> Sirena continua</span></label>
+                            <label class="alarm-option"><input type="checkbox" id="emitterMotionBackground"><span><i class="fas fa-moon"></i> Analizar con la pestaña oculta</span></label>
+                        </div>
+                    </div>
+
+                    <div class="motion-actions">
+                        <button id="emitterBtnTestAlarm" class="secondary-button"><i class="fas fa-bell"></i> Probar alarma</button>
+                        <button id="emitterBtnClearLog" class="secondary-button"><i class="fas fa-trash"></i> Limpiar registro</button>
+                    </div>
+
+                    <div class="motion-log-wrapper">
+                        <div class="alarm-types-title"><i class="fas fa-clock-rotate-left"></i> Registro de eventos</div>
+                        <div class="motion-log" id="emitterMotionLog">
+                            <div class="motion-log-empty" id="emitterMotionLogEmpty">
+                                <i class="fas fa-mug-hot"></i>
+                                <p>Sin eventos detectados</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <p class="hint">
+                        <i class="fas fa-shield-halved"></i> El análisis es local y sólo lee fotogramas: no cambia la calidad ni la estabilidad de la transmisión.
+                    </p>
                 </div>
 
                 <div class="code-section">
@@ -226,6 +335,9 @@
                 <div class="video-section">
                     <div class="video-container">
                         <video id="remoteVideo" autoplay playsinline></video>
+                        <div class="motion-badge hidden" id="viewerMotionBadge">
+                            <i class="fas fa-circle"></i><span>Sin movimiento</span>
+                        </div>
                         <div class="video-overlay" id="connectionOverlay">
                             <div class="connection-prompt">
                                 <i class="fas fa-satellite"></i>
@@ -255,6 +367,111 @@
                             </div>
                         </div>
                     </div>
+                </div>
+
+                <!-- Detección de movimiento -->
+                <div class="motion-section" id="viewerMotionSection">
+                    <div class="section-title motion-title">
+                        <span><i class="fas fa-person-running"></i> Detección de Movimiento</span>
+                        <label class="switch" title="Activar detección de movimiento">
+                            <input type="checkbox" id="viewerMotionToggle">
+                            <span class="switch-slider"></span>
+                        </label>
+                    </div>
+
+                    <div class="motion-status">
+                        <div class="motion-state" id="viewerMotionState">
+                            <i class="fas fa-power-off" id="viewerMotionStateIcon"></i>
+                            <span id="viewerMotionStateText">Inactiva</span>
+                        </div>
+
+                        <div class="motion-meter">
+                            <div class="motion-meter-head">
+                                <span>Nivel de movimiento</span>
+                                <span id="viewerMotionLevel">0.0%</span>
+                            </div>
+                            <div class="motion-meter-track">
+                                <div class="motion-meter-fill" id="viewerMotionBar"></div>
+                                <div class="motion-meter-mark" title="Umbral de disparo"></div>
+                            </div>
+                            <div class="motion-meter-foot" id="viewerMotionThreshold">Umbral de disparo: --</div>
+                        </div>
+
+                        <div class="motion-counters">
+                            <div class="motion-counter">
+                                <strong id="viewerMotionCount">0</strong>
+                                <small>Eventos</small>
+                            </div>
+                            <div class="motion-counter">
+                                <strong id="viewerLastMotion">--:--:--</strong>
+                                <small>Último</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="motion-settings">
+                        <div class="setting">
+                            <label for="viewerMotionSensitivity">
+                                <i class="fas fa-gauge-high"></i> Sensibilidad: <span id="viewerMotionSensitivityValue">Media</span>
+                            </label>
+                            <input type="range" id="viewerMotionSensitivity" min="1" max="10" step="1" value="6">
+                        </div>
+                        <div class="setting">
+                            <label for="viewerMotionRate">
+                                <i class="fas fa-stopwatch"></i> Análisis: <span id="viewerMotionRateValue">3/s</span>
+                            </label>
+                            <input type="range" id="viewerMotionRate" min="1" max="10" step="1" value="3">
+                        </div>
+                        <div class="setting">
+                            <label for="viewerMotionCooldown">
+                                <i class="fas fa-hourglass-half"></i> Silencio entre alarmas: <span id="viewerMotionCooldownValue">15s</span>
+                            </label>
+                            <input type="range" id="viewerMotionCooldown" min="5" max="120" step="5" value="15">
+                        </div>
+                        <div class="setting">
+                            <label for="viewerMotionVolume">
+                                <i class="fas fa-volume-high"></i> Volumen de alarma: <span id="viewerMotionVolumeValue">75%</span>
+                            </label>
+                            <input type="range" id="viewerMotionVolume" min="0" max="100" step="5" value="75">
+                        </div>
+                    </div>
+
+                    <div class="alarm-types">
+                        <div class="alarm-types-title"><i class="fas fa-bell"></i> Tipos de alarma</div>
+                        <div class="alarm-grid">
+                            <label class="alarm-option"><input type="checkbox" data-alarm="siren"><span><i class="fas fa-tower-broadcast"></i> Sirena</span></label>
+                            <label class="alarm-option"><input type="checkbox" data-alarm="beep"><span><i class="fas fa-bell"></i> Timbre</span></label>
+                            <label class="alarm-option"><input type="checkbox" data-alarm="voice"><span><i class="fas fa-comment-dots"></i> Voz</span></label>
+                            <label class="alarm-option"><input type="checkbox" data-alarm="vibrate"><span><i class="fas fa-mobile-screen-button"></i> Vibración</span></label>
+                            <label class="alarm-option"><input type="checkbox" data-alarm="flash"><span><i class="fas fa-bolt"></i> Alerta visual</span></label>
+                            <label class="alarm-option"><input type="checkbox" data-alarm="notify"><span><i class="fas fa-envelope-open-text"></i> Notificación</span></label>
+                            <label class="alarm-option wide"><input type="checkbox" data-alarm="remote"><span><i class="fas fa-satellite-dish"></i> Avisar al emisor</span></label>
+                            <label class="alarm-option wide"><input type="checkbox" data-alarm="remote-react"><span><i class="fas fa-reply"></i> Reaccionar a avisos del emisor</span></label>
+                        </div>
+                        <div class="alarm-grid extras">
+                            <label class="alarm-option"><input type="checkbox" id="viewerMotionContinuous"><span><i class="fas fa-repeat"></i> Sirena continua</span></label>
+                            <label class="alarm-option"><input type="checkbox" id="viewerMotionBackground"><span><i class="fas fa-moon"></i> Analizar con la pestaña oculta</span></label>
+                        </div>
+                    </div>
+
+                    <div class="motion-actions">
+                        <button id="viewerBtnTestAlarm" class="secondary-button"><i class="fas fa-bell"></i> Probar alarma</button>
+                        <button id="viewerBtnClearLog" class="secondary-button"><i class="fas fa-trash"></i> Limpiar registro</button>
+                    </div>
+
+                    <div class="motion-log-wrapper">
+                        <div class="alarm-types-title"><i class="fas fa-clock-rotate-left"></i> Registro de eventos</div>
+                        <div class="motion-log" id="viewerMotionLog">
+                            <div class="motion-log-empty" id="viewerMotionLogEmpty">
+                                <i class="fas fa-mug-hot"></i>
+                                <p>Sin eventos detectados</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <p class="hint">
+                        <i class="fas fa-shield-halved"></i> El análisis es local y sólo lee fotogramas: no cambia la calidad ni la estabilidad de la transmisión.
+                    </p>
                 </div>
 
                 <div class="communication-section">
@@ -303,6 +520,20 @@
             </div>
         </div>
     </div>
+
+    <!-- Alerta visual de movimiento (pantalla completa, no bloquea la interacción) -->
+    <div id="alarmOverlay" class="alarm-overlay hidden">
+        <div class="alarm-banner">
+            <i class="fas fa-triangle-exclamation"></i>
+            <div class="alarm-banner-text">
+                <strong id="alarmBannerTitle">MOVIMIENTO DETECTADO</strong>
+                <span id="alarmBannerText">Analizando…</span>
+            </div>
+        </div>
+    </div>
+    <button id="btnStopAlarm" class="alarm-stop-button hidden">
+        <i class="fas fa-hand"></i> Detener alarma
+    </button>
 
     <!-- Notificaciones -->
     <div id="notificationContainer"></div>
