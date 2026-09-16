@@ -62,6 +62,10 @@ class RemoteVisionApp {
         this.connectionTimeouts = [];
         this.supervisorAudioElement = null;
 
+        // Detección de movimiento (motion.js) — ver initMotionDetection()
+        this.motionPanels = null;
+        this.dataConnections = new Map();
+
         // Elementos del DOM
         this.elements = {
             modeSelection: document.getElementById('modeSelection'),
@@ -109,6 +113,8 @@ class RemoteVisionApp {
             connectionStatus: document.getElementById('connectionStatus'),
             
             notificationContainer: document.getElementById('notificationContainer'),
+            alarmOverlay: document.getElementById('alarmOverlay'),
+            btnStopAlarm: document.getElementById('btnStopAlarm'),
             errorModal: document.getElementById('errorModal'),
             errorMessage: document.getElementById('errorMessage'),
             btnRetry: document.getElementById('btnRetry'),
@@ -128,7 +134,146 @@ class RemoteVisionApp {
         this.loadRecentCodes();
         
         this.elements.videoQuality.value = this.state.settings.videoQuality;
+        this.initMotionDetection();
         this.showNotification('Sistema inicializado correctamente', 'success');
+    }
+
+    // ===== DETECCIÓN DE MOVIMIENTO (motion.js) =====
+    /**
+     * Prepara los paneles de detección del emisor y del supervisor.
+     * Sólo lee fotogramas del <video>: no modifica streams ni la conexión WebRTC.
+     */
+    initMotionDetection() {
+        if (typeof MotionPanel === 'undefined') {
+            console.warn('⚠️ motion.js no está disponible: la detección de movimiento queda desactivada');
+            return;
+        }
+
+        const common = {
+            notify: (message, type) => this.showNotification(message, type),
+            sendRemoteAlert: (payload) => this.sendMotionAlert(payload)
+        };
+
+        try {
+            this.motionPanels = {
+                emitter: new MotionPanel(Object.assign({}, common, {
+                    prefix: 'emitter',
+                    role: 'emitter',
+                    getVideo: () => this.elements.localVideo
+                })),
+                viewer: new MotionPanel(Object.assign({}, common, {
+                    prefix: 'viewer',
+                    role: 'viewer',
+                    getVideo: () => this.elements.remoteVideo
+                }))
+            };
+
+            Object.keys(this.motionPanels).forEach(key => {
+                try {
+                    this.motionPanels[key].init();
+                } catch (error) {
+                    console.error(`Error al iniciar el panel de detección (${key}):`, error);
+                }
+            });
+
+            if (this.elements.btnStopAlarm) {
+                this.elements.btnStopAlarm.addEventListener('click', () => this.stopAllAlarms());
+            }
+
+            console.log('✅ Detección de movimiento lista');
+        } catch (error) {
+            console.error('Error al preparar la detección de movimiento:', error);
+            this.motionPanels = null;
+        }
+    }
+
+    /** Panel de detección correspondiente al modo actual. */
+    getMotionPanel() {
+        if (!this.motionPanels) return null;
+        return this.state.isEmitter ? this.motionPanels.emitter : this.motionPanels.viewer;
+    }
+
+    /** Detiene cualquier alarma que esté sonando. */
+    stopAllAlarms() {
+        if (this.motionPanels) {
+            Object.keys(this.motionPanels).forEach(key => {
+                try {
+                    this.motionPanels[key].alarms.stop();
+                } catch (error) { /* ignorado a propósito */ }
+            });
+        }
+
+        if (this.elements.btnStopAlarm) {
+            this.elements.btnStopAlarm.classList.add('hidden');
+        }
+
+        this.showNotification('Alarma detenida', 'info');
+    }
+
+    /** Avisa al otro dispositivo de que se ha detectado movimiento. */
+    sendMotionAlert(payload) {
+        const sent = this.broadcastData({
+            type: 'motion-alert',
+            source: this.state.isEmitter ? 'emitter' : 'viewer',
+            percent: payload.percent || 0,
+            thresholdPercent: payload.thresholdPercent || 0,
+            timestamp: payload.timestamp || Date.now()
+        });
+
+        if (!sent) {
+            this.showNotification('No hay ningún dispositivo conectado al que avisar', 'warning');
+        }
+
+        return sent;
+    }
+
+    /** Envía un mensaje JSON a todas las conexiones de datos abiertas. */
+    broadcastData(message) {
+        let payload;
+
+        try {
+            payload = JSON.stringify(message);
+        } catch (error) {
+            return false;
+        }
+
+        let sent = 0;
+
+        this.dataConnections.forEach(connection => {
+            try {
+                if (connection && connection.open) {
+                    connection.send(payload);
+                    sent++;
+                }
+            } catch (error) {
+                console.warn('No se pudo enviar el aviso por el canal de datos:', error);
+            }
+        });
+
+        if (sent === 0 && this.dataConnection && this.dataConnection.open) {
+            try {
+                this.dataConnection.send(payload);
+                sent++;
+            } catch (error) {
+                console.warn('No se pudo enviar el aviso por el canal de datos:', error);
+            }
+        }
+
+        return sent > 0;
+    }
+
+    /** El otro dispositivo ha detectado movimiento. */
+    handleMotionAlert(message) {
+        const panel = this.getMotionPanel();
+
+        if (!panel) return;
+
+        panel.handleRemoteAlert({
+            percent: message.percent || 0,
+            thresholdPercent: message.thresholdPercent || 0,
+            source: message.source || 'remote',
+            timestamp: message.timestamp || Date.now()
+        });
     }
 
     async initializePeerJS(customId = null) {
@@ -413,6 +558,9 @@ class RemoteVisionApp {
             
             this.elements.btnAudioToggle.disabled = false;
             
+            // Detección de movimiento: el vídeo local ya está disponible
+            if (this.motionPanels) this.motionPanels.emitter.attach();
+            
             this.showNotification('Transmisión iniciada correctamente', 'success');
             
             if (this.state.connectedViewers.size > 0) {
@@ -447,6 +595,8 @@ class RemoteVisionApp {
             this.supervisorAudioElement.remove();
             this.supervisorAudioElement = null;
         }
+        
+        if (this.motionPanels) this.motionPanels.emitter.detach('stream-stopped');
         
         this.elements.btnStartEmitter.classList.remove('hidden');
         this.elements.btnStopEmitter.classList.add('hidden');
@@ -630,6 +780,7 @@ class RemoteVisionApp {
                 clearTimeout(timeout);
                 console.log('✅ Conexión de datos abierta con:', dataConn.peer);
                 this.dataConnection = dataConn;
+                this.dataConnections.set(dataConn.peer, dataConn);
                 
                 dataConn.on('data', (data) => {
                     this.handleDataMessage(data);
@@ -637,6 +788,7 @@ class RemoteVisionApp {
                 
                 dataConn.on('close', () => {
                     console.log('Conexión de datos cerrada');
+                    this.dataConnections.delete(dataConn.peer);
                     this.dataConnection = null;
                     if (this.state.isConnected) {
                         this.handleDisconnection();
@@ -774,6 +926,9 @@ class RemoteVisionApp {
         
         this.setupVideoForMobile();
         
+        // Detección de movimiento: ya hay vídeo remoto que analizar
+        if (this.motionPanels) this.motionPanels.viewer.attach();
+        
         this.elements.remoteVideo.muted = false;
         this.elements.remoteVideo.volume = this.elements.remoteVolume.value / 100;
         
@@ -851,6 +1006,7 @@ class RemoteVisionApp {
         conn.on('open', () => {
             console.log('✅ Conexión de datos recibida de emisor:', conn.peer);
             this.dataConnection = conn;
+            this.dataConnections.set(conn.peer, conn);
             
             conn.on('data', (data) => {
                 this.handleDataMessage(data);
@@ -858,6 +1014,7 @@ class RemoteVisionApp {
             
             conn.on('close', () => {
                 console.log('Conexión de datos cerrada');
+                this.dataConnections.delete(conn.peer);
                 this.dataConnection = null;
                 if (this.state.isConnected) {
                     this.handleDisconnection();
@@ -903,6 +1060,10 @@ class RemoteVisionApp {
                 case 'pong':
                     const latency = Date.now() - message.timestamp;
                     this.elements.latencyValue.textContent = `${latency} ms`;
+                    break;
+                    
+                case 'motion-alert':
+                    this.handleMotionAlert(message);
                     break;
             }
         } catch (error) {
@@ -1146,6 +1307,8 @@ class RemoteVisionApp {
             this.dataConnection.close();
             this.dataConnection = null;
         }
+        
+        if (this.motionPanels) this.motionPanels.viewer.detach('disconnected');
         
         if (this.remoteStream) {
             this.remoteStream.getTracks().forEach(track => track.stop());
