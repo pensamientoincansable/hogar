@@ -30,6 +30,8 @@ class RemoteVisionApp {
             isViewer: false,
             isConnected: false,
             isStreaming: false,
+            isStartingStream: false,
+            isConnecting: false,
             isAudioEnabled: false,
             isFrontCamera: true,
             isFlipped: false,
@@ -61,8 +63,9 @@ class RemoteVisionApp {
         this.localAudioStream = null;
         this.connectionTimeouts = [];
         this.supervisorAudioElement = null;
+        this.pendingIncomingCalls = new Map();
 
-        // Detección de movimiento (motion.js) — ver initMotionDetection()
+        // La detección de movimiento se ejecuta únicamente en el supervisor.
         this.motionPanels = null;
         this.dataConnections = new Map();
 
@@ -78,6 +81,7 @@ class RemoteVisionApp {
             backFromEmitter: document.getElementById('backFromEmitter'),
             localVideo: document.getElementById('localVideo'),
             emitterCode: document.getElementById('emitterCode'),
+            emitterCodeStatus: document.getElementById('emitterCodeStatus'),
             btnStartEmitter: document.getElementById('btnStartEmitter'),
             btnStopEmitter: document.getElementById('btnStopEmitter'),
             btnCopyCode: document.getElementById('btnCopyCode'),
@@ -95,6 +99,8 @@ class RemoteVisionApp {
             btnConnect: document.getElementById('btnConnect'),
             remoteVideo: document.getElementById('remoteVideo'),
             connectionOverlay: document.getElementById('connectionOverlay'),
+            connectionPromptTitle: document.getElementById('connectionPromptTitle'),
+            connectionPromptText: document.getElementById('connectionPromptText'),
             btnFullscreen: document.getElementById('btnFullscreen'),
             btnTakeSnapshot: document.getElementById('btnTakeSnapshot'),
             btnMuteAudio: document.getElementById('btnMuteAudio'),
@@ -130,7 +136,7 @@ class RemoteVisionApp {
         
         this.updateConnectionStatus('🟢 Selecciona un modo');
         this.setupEventListeners();
-        this.generateDisplayCode();
+        this.generateDisplayCode({ notify: false });
         this.loadRecentCodes();
         
         this.elements.videoQuality.value = this.state.settings.videoQuality;
@@ -140,8 +146,8 @@ class RemoteVisionApp {
 
     // ===== DETECCIÓN DE MOVIMIENTO (motion.js) =====
     /**
-     * Prepara los paneles de detección del emisor y del supervisor.
-     * Sólo lee fotogramas del <video>: no modifica streams ni la conexión WebRTC.
+     * Prepara exclusivamente la detección del supervisor. El emisor no crea
+     * detector, no analiza su cámara y no muestra controles de movimiento.
      */
     initMotionDetection() {
         if (typeof MotionPanel === 'undefined') {
@@ -149,58 +155,41 @@ class RemoteVisionApp {
             return;
         }
 
-        const common = {
-            notify: (message, type) => this.showNotification(message, type),
-            sendRemoteAlert: (payload) => this.sendMotionAlert(payload)
-        };
-
         try {
             this.motionPanels = {
-                emitter: new MotionPanel(Object.assign({}, common, {
-                    prefix: 'emitter',
-                    role: 'emitter',
-                    getVideo: () => this.elements.localVideo
-                })),
-                viewer: new MotionPanel(Object.assign({}, common, {
+                viewer: new MotionPanel({
                     prefix: 'viewer',
                     role: 'viewer',
-                    getVideo: () => this.elements.remoteVideo
-                }))
+                    getVideo: () => this.elements.remoteVideo,
+                    notify: (message, type) => this.showNotification(message, type),
+                    sendRemoteAlert: (payload) => this.sendMotionAlert(payload)
+                })
             };
-
-            Object.keys(this.motionPanels).forEach(key => {
-                try {
-                    this.motionPanels[key].init();
-                } catch (error) {
-                    console.error(`Error al iniciar el panel de detección (${key}):`, error);
-                }
-            });
+            this.motionPanels.viewer.init();
 
             if (this.elements.btnStopAlarm) {
                 this.elements.btnStopAlarm.addEventListener('click', () => this.stopAllAlarms());
             }
 
-            console.log('✅ Detección de movimiento lista');
+            console.log('✅ Detección de movimiento del supervisor lista');
         } catch (error) {
             console.error('Error al preparar la detección de movimiento:', error);
             this.motionPanels = null;
         }
     }
 
-    /** Panel de detección correspondiente al modo actual. */
+    /** Panel de detección del supervisor, sólo cuando ese modo está activo. */
     getMotionPanel() {
-        if (!this.motionPanels) return null;
-        return this.state.isEmitter ? this.motionPanels.emitter : this.motionPanels.viewer;
+        if (!this.motionPanels || !this.state.isViewer) return null;
+        return this.motionPanels.viewer;
     }
 
     /** Detiene cualquier alarma que esté sonando. */
     stopAllAlarms() {
-        if (this.motionPanels) {
-            Object.keys(this.motionPanels).forEach(key => {
-                try {
-                    this.motionPanels[key].alarms.stop();
-                } catch (error) { /* ignorado a propósito */ }
-            });
+        if (this.motionPanels && this.motionPanels.viewer) {
+            try {
+                this.motionPanels.viewer.alarms.stop();
+            } catch (error) { /* ignorado a propósito */ }
         }
 
         if (this.elements.btnStopAlarm) {
@@ -214,7 +203,7 @@ class RemoteVisionApp {
     sendMotionAlert(payload) {
         const sent = this.broadcastData({
             type: 'motion-alert',
-            source: this.state.isEmitter ? 'emitter' : 'viewer',
+            source: 'viewer',
             percent: payload.percent || 0,
             thresholdPercent: payload.thresholdPercent || 0,
             timestamp: payload.timestamp || Date.now()
@@ -266,7 +255,15 @@ class RemoteVisionApp {
     handleMotionAlert(message) {
         const panel = this.getMotionPanel();
 
-        if (!panel) return;
+        // El emisor no analiza movimiento, pero puede recibir un aviso explícito
+        // enviado por el supervisor sin activar ningún detector local.
+        if (!panel) {
+            if (this.state.isEmitter) {
+                const percent = Number(message.percent) || 0;
+                this.showNotification(`Movimiento detectado por el supervisor (${percent.toFixed(1)}%)`, 'warning');
+            }
+            return;
+        }
 
         panel.handleRemoteAlert({
             percent: message.percent || 0,
@@ -277,31 +274,56 @@ class RemoteVisionApp {
     }
 
     async initializePeerJS(customId = null) {
+        if (this.peer) {
+            try { this.peer.destroy(); } catch (error) { /* ya estaba cerrado */ }
+            this.peer = null;
+        }
+
+        this.dataConnections.clear();
+        this.dataConnection = null;
+        for (const call of this.pendingIncomingCalls.values()) {
+            try { call.close(); } catch (error) { /* ya estaba cerrada */ }
+        }
+        this.pendingIncomingCalls.clear();
+        this.state.peerId = null;
+
         return new Promise((resolve, reject) => {
-            if (this.peer && !this.peer.disconnected) {
-                this.peer.destroy();
-                this.peer = null;
-            }
-            
+            let settled = false;
+            let initTimeout = null;
+
+            const finish = (callback, value) => {
+                if (settled) return;
+                settled = true;
+                if (initTimeout !== null) clearTimeout(initTimeout);
+                callback(value);
+            };
+
             try {
-                this.peer = customId ? 
-                    new Peer(customId, this.config.peerServer) : 
-                    new Peer(this.config.peerServer);
-                
-                this.peer.on('open', (id) => {
+                const peer = customId
+                    ? new Peer(customId, this.config.peerServer)
+                    : new Peer(undefined, this.config.peerServer);
+                this.peer = peer;
+
+                peer.on('open', (id) => {
+                    if (this.peer !== peer) return;
                     console.log('✅ PeerJS conectado con ID:', id);
                     this.state.peerId = id;
+                    if (customId && this.state.isEmitter) this.state.currentCode = String(id).toUpperCase();
                     this.updateConnectionStatus('🟢 Conectado al servidor');
-                    resolve();
+                    finish(resolve, id);
                 });
-                
-                this.peer.on('error', (err) => {
+
+                peer.on('error', (err) => {
+                    if (this.peer !== peer) return;
                     console.error('❌ Error de PeerJS:', err);
-                    
+
                     let errorMsg = 'Error de conexión';
-                    switch(err.type) {
+                    switch (err.type) {
+                        case 'unavailable-id':
+                            errorMsg = 'El código ya está en uso. Genera uno nuevo';
+                            break;
                         case 'peer-unavailable':
-                            errorMsg = 'El código ingresado no existe o ha expirado';
+                            errorMsg = 'El código no existe todavía o el emisor está desconectado';
                             break;
                         case 'network':
                             errorMsg = 'Error de red. Verifica tu conexión a internet';
@@ -312,34 +334,37 @@ class RemoteVisionApp {
                         case 'disconnected':
                             errorMsg = 'Desconectado del servidor';
                             break;
+                        default:
+                            if (err && err.message) errorMsg = err.message;
                     }
-                    
-                    if (err.type !== 'disconnected') {
-                        reject(errorMsg);
-                    }
+
+                    // Los errores posteriores a `open` pertenecen a una conexión
+                    // concreta y no deben invalidar la inicialización del modo.
+                    if (!settled) finish(reject, new Error(errorMsg));
                 });
-                
-                this.peer.on('connection', (conn) => {
+
+                peer.on('connection', (conn) => {
+                    if (this.peer !== peer) return;
                     console.log('📡 Conexión de datos recibida de:', conn.peer);
                     this.setupDataConnection(conn);
                 });
-                
-                this.peer.on('call', (call) => {
+
+                peer.on('call', (call) => {
+                    if (this.peer !== peer) return;
                     console.log('📞 Llamada recibida de:', call.peer);
                     this.handleIncomingCall(call);
                 });
-                
-                const initTimeout = setTimeout(() => {
-                    if (!this.state.peerId) {
-                        reject('Timeout al conectar con el servidor PeerJS');
-                    }
+
+                peer.on('disconnected', () => {
+                    if (this.peer === peer) this.updateConnectionStatus('🟠 Reconectando con el servidor…');
+                });
+
+                initTimeout = setTimeout(() => {
+                    finish(reject, new Error('Tiempo de espera agotado al conectar con el servidor PeerJS'));
                 }, 15000);
-                
-                this.connectionTimeouts.push(initTimeout);
-                
             } catch (error) {
                 console.error('Error al crear instancia de Peer:', error);
-                reject('Error al inicializar PeerJS');
+                finish(reject, new Error('Error al inicializar PeerJS'));
             }
         });
     }
@@ -354,15 +379,21 @@ class RemoteVisionApp {
         this.elements.btnStartEmitter.addEventListener('click', () => this.toggleEmitterStream());
         this.elements.btnStopEmitter.addEventListener('click', () => this.stopEmitter());
         this.elements.btnCopyCode.addEventListener('click', () => this.copyCode());
-        this.elements.btnRefreshCode.addEventListener('click', () => this.generateDisplayCode());
+        this.elements.btnRefreshCode.addEventListener('click', () => this.refreshEmitterCode());
         this.elements.btnSwitchCamera.addEventListener('click', () => this.switchCamera());
         this.elements.btnFlipCamera.addEventListener('click', () => this.flipCamera());
         this.elements.btnAudioToggle.addEventListener('click', () => this.toggleEmitterAudio());
         this.elements.videoQuality.addEventListener('change', (e) => this.changeVideoQuality(e.target.value));
         
         this.elements.btnConnect.addEventListener('click', () => this.connectToEmitter());
-        this.elements.peerCodeInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') this.connectToEmitter();
+        this.elements.peerCodeInput.addEventListener('input', (event) => {
+            event.target.value = this.normalizeAccessCode(event.target.value);
+        });
+        this.elements.peerCodeInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                this.connectToEmitter();
+            }
         });
         this.elements.btnFullscreen.addEventListener('click', () => this.toggleFullscreen());
         this.elements.btnTakeSnapshot.addEventListener('click', () => this.takeSnapshot());
@@ -380,26 +411,121 @@ class RemoteVisionApp {
         });
     }
 
-    generateDisplayCode() {
-        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    normalizeAccessCode(value) {
+        return String(value || '')
+            .toUpperCase()
+            .replace(/[^A-Z0-9]/g, '')
+            .slice(0, 6);
+    }
+
+    generateDisplayCode(options = {}) {
+        // Se evitan 0/O y 1/I para reducir errores al copiar el código a mano.
+        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+        const previous = this.state.displayCode;
         let code = '';
         for (let i = 0; i < 6; i++) {
             code += chars.charAt(Math.floor(Math.random() * chars.length));
         }
-        
+        if (code === previous) {
+            const last = chars.indexOf(code.charAt(5));
+            code = code.slice(0, 5) + chars.charAt((last + 1) % chars.length);
+        }
+
         this.state.displayCode = code;
+        this.state.currentCode = null;
         this.elements.emitterCode.textContent = code;
-        
-        this.showNotification('Nuevo código generado: ' + code, 'success');
+        if (options.notify !== false) this.showNotification('Nuevo código generado: ' + code, 'success');
+        return code;
     }
 
-    copyCode() {
-        navigator.clipboard.writeText(this.state.displayCode).then(() => {
+    updateEmitterCodeStatus(message, type = 'pending') {
+        const element = this.elements.emitterCodeStatus;
+        if (!element) return;
+
+        const icons = {
+            pending: 'fa-circle-notch fa-spin',
+            ready: 'fa-circle-check',
+            error: 'fa-circle-exclamation'
+        };
+        element.className = 'code-status ' + type;
+        element.innerHTML = `<i class="fas ${icons[type] || icons.pending}"></i> ${message}`;
+    }
+
+    async registerEmitterCode() {
+        let lastError = null;
+
+        for (let attempt = 0; attempt < 3; attempt++) {
+            const code = this.state.displayCode || this.generateDisplayCode({ notify: false });
+            this.updateEmitterCodeStatus('Activando código…', 'pending');
+
+            try {
+                await this.initializePeerJS(code);
+                this.state.currentCode = code;
+                this.updateEmitterCodeStatus('Código activo y listo para conectar', 'ready');
+                return code;
+            } catch (error) {
+                lastError = error;
+                // Una colisión de código es poco probable, pero se resuelve sin
+                // obligar al usuario a volver a pulsar ningún botón.
+                if (String(error.message || error).includes('uso') && attempt < 2) {
+                    this.generateDisplayCode({ notify: false });
+                    continue;
+                }
+                break;
+            }
+        }
+
+        this.updateEmitterCodeStatus('No se pudo activar el código', 'error');
+        throw lastError || new Error('No se pudo activar el código');
+    }
+
+    async refreshEmitterCode() {
+        if (this.state.isStreaming || this.state.isStartingStream) {
+            this.showNotification('Detén la transmisión antes de cambiar el código', 'warning');
+            return;
+        }
+
+        this.elements.btnRefreshCode.disabled = true;
+        this.elements.btnCopyCode.disabled = true;
+        this.generateDisplayCode({ notify: false });
+
+        try {
+            await this.registerEmitterCode();
+            this.showNotification('Nuevo código activo: ' + this.state.currentCode, 'success');
+        } catch (error) {
+            this.showNotification('No se pudo activar el nuevo código: ' + error.message, 'error');
+        } finally {
+            this.elements.btnRefreshCode.disabled = false;
+            this.elements.btnCopyCode.disabled = this.state.currentCode !== this.state.displayCode;
+        }
+    }
+
+    async copyCode() {
+        const code = this.state.currentCode;
+        if (!code || code !== this.state.displayCode) {
+            this.showNotification('Espera a que el código aparezca como activo', 'warning');
+            return;
+        }
+
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(code);
+            } else {
+                const input = document.createElement('textarea');
+                input.value = code;
+                input.setAttribute('readonly', '');
+                input.style.position = 'fixed';
+                input.style.opacity = '0';
+                document.body.appendChild(input);
+                input.select();
+                document.execCommand('copy');
+                input.remove();
+            }
             this.showNotification('Código copiado al portapapeles', 'success');
-        }).catch(err => {
-            console.error('Error al copiar:', err);
-            this.showNotification('Error al copiar el código', 'error');
-        });
+        } catch (error) {
+            console.error('Error al copiar:', error);
+            this.showNotification('No se pudo copiar. Mantén pulsado el código para copiarlo', 'error');
+        }
     }
 
     loadRecentCodes() {
@@ -431,24 +557,31 @@ class RemoteVisionApp {
 
     // ===== MODOS =====
     async setEmitterMode() {
+        if (this.state.isEmitter) return;
+
         try {
             this.showNotification('Activando modo emisor...', 'info');
-            
-            await this.initializePeerJS(this.state.displayCode);
-            
             this.state.isEmitter = true;
             this.state.isViewer = false;
-            
+
             this.elements.modeSelection.classList.add('hidden');
             this.elements.emitterPanel.classList.remove('hidden');
             this.elements.viewerPanel.classList.add('hidden');
-            
+            this.elements.btnCopyCode.disabled = true;
+            this.elements.btnRefreshCode.disabled = true;
+
+            await this.registerEmitterCode();
+
+            this.elements.btnCopyCode.disabled = false;
+            this.elements.btnRefreshCode.disabled = false;
             this.updateEmitterStatus('Listo para transmitir', 'ready');
             this.showNotification('Modo emisor activado', 'success');
-            
         } catch (error) {
             console.error('Error al activar modo emisor:', error);
-            this.showNotification('Error al activar modo emisor: ' + error, 'error');
+            this.state.isEmitter = false;
+            this.elements.btnCopyCode.disabled = false;
+            this.elements.btnRefreshCode.disabled = false;
+            this.showNotification('Error al activar modo emisor: ' + error.message, 'error');
             this.showModeSelection();
         }
     }
@@ -468,6 +601,7 @@ class RemoteVisionApp {
             this.elements.emitterPanel.classList.add('hidden');
             
             this.updateViewerStatus('Desconectado', 'disconnected');
+            this.updateConnectionPrompt('ESPERANDO CONEXIÓN', 'Introduce un código para ver la transmisión en vivo');
             this.showNotification('Modo supervisor activado', 'success');
             
         } catch (error) {
@@ -484,17 +618,26 @@ class RemoteVisionApp {
             this.disconnectFromEmitter();
         }
         
+        for (const call of this.pendingIncomingCalls.values()) {
+            try { call.close(); } catch (error) { /* ya estaba cerrada */ }
+        }
+        this.pendingIncomingCalls.clear();
+
         if (this.peer) {
             this.peer.destroy();
             this.peer = null;
         }
-        
+
+        this.dataConnections.clear();
+        this.dataConnection = null;
         this.clearAllTimeouts();
-        
+
         this.state.isEmitter = false;
         this.state.isViewer = false;
         this.state.isConnected = false;
+        this.state.isConnecting = false;
         this.state.peerId = null;
+        this.state.currentCode = null;
         
         this.elements.emitterPanel.classList.add('hidden');
         this.elements.viewerPanel.classList.add('hidden');
@@ -506,7 +649,7 @@ class RemoteVisionApp {
 
     // ===== EMISOR =====
     async toggleEmitterStream() {
-        console.log('toggleEmitterStream llamado, isStreaming:', this.state.isStreaming);
+        if (this.state.isStartingStream) return;
         if (!this.state.isStreaming) {
             await this.startEmitter();
         } else {
@@ -514,99 +657,167 @@ class RemoteVisionApp {
         }
     }
 
-    async startEmitter() {
-        console.log('startEmitter iniciando...');
+    async requestEmitterMedia() {
+        await this.getMediaDevices();
+
+        const quality = this.config.videoQuality[this.state.settings.videoQuality];
+        const facingMode = this.state.isFrontCamera ? 'user' : 'environment';
+        const preferredVideo = {
+            ...quality,
+            ...(this.currentDeviceId
+                ? { deviceId: { exact: this.currentDeviceId } }
+                : { facingMode: { ideal: facingMode } })
+        };
+        const preferredAudio = {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+        };
+
         try {
-            this.showNotification('Iniciando transmisión...', 'info');
-            
-            await this.getMediaDevices();
-            
-            const facingMode = this.state.isFrontCamera ? 'user' : 'environment';
-            
-            const constraints = {
-                video: {
-                    ...this.config.videoQuality[this.state.settings.videoQuality],
-                    facingMode: facingMode,
-                    deviceId: this.currentDeviceId ? { exact: this.currentDeviceId } : undefined
-                },
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    channelCount: 2,
-                    sampleRate: 48000
+            return await navigator.mediaDevices.getUserMedia({
+                video: preferredVideo,
+                audio: preferredAudio
+            });
+        } catch (error) {
+            if (error.name === 'SecurityError') throw error;
+
+            // Algunos navegadores rechazan la petición completa cuando sólo se
+            // deniega el micrófono. En ese caso aún se intenta abrir la cámara.
+            if (error.name === 'NotAllowedError') {
+                try {
+                    const videoOnly = await navigator.mediaDevices.getUserMedia({
+                        video: { facingMode: { ideal: facingMode } },
+                        audio: false
+                    });
+                    this.showNotification('Cámara activa sin micrófono', 'warning');
+                    return videoOnly;
+                } catch (videoError) {
+                    throw videoError;
                 }
-            };
-            
-            console.log('Solicitando permisos de medios con constraints:', constraints);
-            this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
-            console.log('Stream obtenido exitosamente:', this.localStream);
-            
+            }
+
+            console.warn('No se pudieron aplicar los ajustes preferidos; reintentando con ajustes compatibles', error);
+            try {
+                return await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        width: { ideal: quality.width },
+                        height: { ideal: quality.height },
+                        frameRate: { ideal: quality.frameRate },
+                        facingMode: { ideal: facingMode }
+                    },
+                    audio: preferredAudio
+                });
+            } catch (fallbackError) {
+                if (fallbackError.name === 'NotAllowedError' || fallbackError.name === 'SecurityError') throw fallbackError;
+
+                // Una cámara útil debe poder comenzar aunque el dispositivo no
+                // tenga micrófono o éste esté ocupado.
+                const videoOnly = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: { ideal: facingMode } },
+                    audio: false
+                });
+                this.showNotification('Transmisión iniciada sin micrófono; la cámara sí está activa', 'warning');
+                return videoOnly;
+            }
+        }
+    }
+
+    async startEmitter() {
+        if (this.state.isStartingStream || this.state.isStreaming) return;
+        this.state.isStartingStream = true;
+
+        const startButton = this.elements.btnStartEmitter;
+        startButton.disabled = true;
+        startButton.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Iniciando…';
+        this.updateEmitterStatus('Preparando cámara…', 'connecting');
+
+        try {
+            this.showNotification('Iniciando cámara y micrófono...', 'info');
+
+            // Recupera automáticamente el registro del código si la conexión con
+            // PeerJS se perdió mientras el usuario configuraba la cámara.
+            if (!this.peer || this.peer.disconnected || this.state.currentCode !== this.state.displayCode) {
+                await this.registerEmitterCode();
+            }
+
+            this.localStream = await this.requestEmitterMedia();
             this.elements.localVideo.srcObject = this.localStream;
             this.elements.localVideo.muted = true;
-            
-            await this.elements.localVideo.play().catch(e => {
-                console.log('Video local autoplay bloqueado:', e);
+
+            await this.elements.localVideo.play().catch(error => {
+                console.log('La vista local esperará una interacción para reproducirse:', error);
             });
-            
+
             this.elements.btnStartEmitter.classList.add('hidden');
             this.elements.btnStopEmitter.classList.remove('hidden');
+            this.elements.btnRefreshCode.disabled = true;
             this.state.isStreaming = true;
-            
+
             this.updateEmitterStatus('Transmitiendo en vivo', 'streaming');
             this.updateQualityTag();
-            
-            this.elements.btnAudioToggle.disabled = false;
-            
-            // Detección de movimiento: el vídeo local ya está disponible
-            if (this.motionPanels) this.motionPanels.emitter.attach();
-            
+
+            const hasAudio = this.localStream.getAudioTracks().length > 0;
+            this.elements.btnAudioToggle.disabled = !hasAudio;
+            this.elements.btnAudioToggle.innerHTML = hasAudio
+                ? '<i class="fas fa-microphone"></i> Micrófono: ON'
+                : '<i class="fas fa-microphone-slash"></i> Sin micrófono';
+
+            this.broadcastData({ type: 'emitter-status', streaming: true });
+            this.answerPendingIncomingCalls();
+
             this.showNotification('Transmisión iniciada correctamente', 'success');
-            
             if (this.state.connectedViewers.size > 0) {
                 this.showNotification(`${this.state.connectedViewers.size} supervisor(es) conectado(s)`, 'info');
             }
-            
         } catch (error) {
             console.error('Error al iniciar transmisión:', error);
+            if (this.localStream) {
+                this.localStream.getTracks().forEach(track => track.stop());
+                this.localStream = null;
+                this.elements.localVideo.srcObject = null;
+            }
+            this.updateEmitterStatus('No se pudo iniciar', 'disconnected');
             this.handleMediaError(error);
+        } finally {
+            this.state.isStartingStream = false;
+            startButton.disabled = false;
+            startButton.innerHTML = '<i class="fas fa-play"></i> Iniciar Transmisión';
         }
     }
 
     stopEmitter() {
-        console.log('stopEmitter llamado');
+        const wasStreaming = this.state.isStreaming || !!this.localStream;
+        if (wasStreaming) this.broadcastData({ type: 'emitter-status', streaming: false });
+
         if (this.localStream) {
             this.localStream.getTracks().forEach(track => track.stop());
             this.localStream = null;
             this.elements.localVideo.srcObject = null;
         }
-        
+
         if (this.currentCall) {
-            this.currentCall.close();
+            try { this.currentCall.close(); } catch (error) { /* ya estaba cerrada */ }
             this.currentCall = null;
         }
-        
-        if (this.dataConnection) {
-            this.dataConnection.close();
-            this.dataConnection = null;
-        }
-        
+
         if (this.supervisorAudioElement) {
             this.supervisorAudioElement.remove();
             this.supervisorAudioElement = null;
         }
-        
-        if (this.motionPanels) this.motionPanels.emitter.detach('stream-stopped');
-        
+
         this.elements.btnStartEmitter.classList.remove('hidden');
         this.elements.btnStopEmitter.classList.add('hidden');
+        this.elements.btnRefreshCode.disabled = false;
+        this.elements.btnAudioToggle.disabled = true;
         this.state.isStreaming = false;
-        
+        this.state.isStartingStream = false;
+
         this.state.connectedViewers.clear();
         this.updateConnectedClients();
-        
-        this.updateEmitterStatus('Transmisión detenida', 'disconnected');
-        this.showNotification('Transmisión detenida', 'info');
+
+        this.updateEmitterStatus('Listo para transmitir', 'ready');
+        if (wasStreaming) this.showNotification('Transmisión detenida', 'info');
     }
 
     async switchCamera() {
@@ -728,38 +939,57 @@ class RemoteVisionApp {
 
     // ===== SUPERVISOR =====
     async connectToEmitter() {
-        const code = this.elements.peerCodeInput.value.trim().toUpperCase();
-        
-        if (!code || code.length !== 6) {
+        if (this.state.isConnecting) return;
+
+        const code = this.normalizeAccessCode(this.elements.peerCodeInput.value);
+        this.elements.peerCodeInput.value = code;
+
+        if (!/^[A-Z0-9]{6}$/.test(code)) {
             this.showNotification('Ingresa un código válido de 6 caracteres', 'warning');
             return;
         }
-        
+
         this.saveRecentCode(code);
-        
         this.state.hostPeerId = code;
         this.state.connectionAttempts = 0;
-        
+        this.state.isConnecting = true;
+        this.elements.btnConnect.disabled = true;
+        this.elements.btnConnect.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Conectando';
+
         this.updateViewerStatus('Conectando...', 'connecting');
+        this.updateConnectionPrompt('CONECTANDO…', 'Buscando al emisor y esperando su cámara');
         this.showNotification(`Conectando a ${code}...`, 'info');
-        
-        await this.attemptConnection(code);
+
+        try {
+            await this.attemptConnection(code);
+        } finally {
+            this.state.isConnecting = false;
+            this.elements.btnConnect.disabled = false;
+            this.elements.btnConnect.innerHTML = '<i class="fas fa-plug"></i> Conectar';
+        }
     }
 
     async attemptConnection(code) {
         try {
             this.clearAllTimeouts();
-            
+
             if (!this.peer || this.peer.disconnected) {
-                throw new Error('No conectado al servidor PeerJS');
+                const viewerId = 'viewer-' + Date.now() + '-' + Math.random().toString(36).slice(2, 11);
+                await this.initializePeerJS(viewerId);
             }
-            
-            await this.attemptDataConnection(code);
+
+            // El canal de datos mejora estados y avisos, pero nunca debe impedir
+            // que el vídeo conecte si tarda o no está disponible.
+            this.attemptDataConnection(code).catch(error => {
+                console.warn('El canal de datos no está disponible; se continúa con el vídeo:', error);
+            });
             await this.attemptVideoCall(code);
-            
+            this.state.connectionAttempts = 0;
+            return true;
         } catch (error) {
             console.error('Error en attemptConnection:', error);
             this.handleConnectionError(error.message);
+            return false;
         }
     }
 
@@ -789,7 +1019,7 @@ class RemoteVisionApp {
                 dataConn.on('close', () => {
                     console.log('Conexión de datos cerrada');
                     this.dataConnections.delete(dataConn.peer);
-                    this.dataConnection = null;
+                    if (this.dataConnection === dataConn) this.dataConnection = null;
                     if (this.state.isConnected) {
                         this.handleDisconnection();
                     }
@@ -812,15 +1042,21 @@ class RemoteVisionApp {
 
     // Pista de vídeo vacía para forzar la declaración 'm=video' en el SDP
     createBlankVideoTrack() {
-        const canvas = document.createElement('canvas');
-        canvas.width = 10;
-        canvas.height = 10;
-        const ctx = canvas.getContext('2d');
-        ctx.fillRect(0, 0, 10, 10);
-        const stream = canvas.captureStream(1);
-        const track = stream.getVideoTracks()[0];
-        track.enabled = false;
-        return track;
+        try {
+            const canvas = document.createElement('canvas');
+            canvas.width = 10;
+            canvas.height = 10;
+            const ctx = canvas.getContext('2d');
+            if (ctx && ctx.fillRect) ctx.fillRect(0, 0, 10, 10);
+            if (typeof canvas.captureStream !== 'function') return null;
+            const stream = canvas.captureStream(1);
+            const track = stream.getVideoTracks()[0] || null;
+            if (track) track.enabled = false;
+            return track;
+        } catch (error) {
+            console.warn('El navegador no permite crear una pista de vídeo neutra:', error);
+            return null;
+        }
     }
 
     async createLocalAudioStream() {
@@ -860,7 +1096,8 @@ class RemoteVisionApp {
 
         // Se adjunta el track de video neutro al stream de oferta
         if (this.localAudioStream) {
-            this.localAudioStream.addTrack(this.createBlankVideoTrack());
+            const blankVideoTrack = this.createBlankVideoTrack();
+            if (blankVideoTrack) this.localAudioStream.addTrack(blankVideoTrack);
         }
     }
 
@@ -868,8 +1105,8 @@ class RemoteVisionApp {
         return new Promise(async (resolve, reject) => {
             try {
                 const callTimeout = setTimeout(() => {
-                    reject(new Error('Timeout esperando stream del emisor (20 segundos)'));
-                }, 20000);
+                    reject(new Error('El emisor no inició la cámara dentro de 90 segundos'));
+                }, 90000);
                 
                 this.connectionTimeouts.push(callTimeout);
                 
@@ -951,7 +1188,7 @@ class RemoteVisionApp {
         this.updateViewerStatus('Conectado', 'streaming');
         this.updateConnectionState('Conectado');
         
-        this.elements.btnStartAudio.classList.remove('disabled');
+        this.elements.btnStartAudio.classList.remove('hidden', 'disabled');
         this.elements.btnStartAudio.disabled = false;
         
         this.startUptimeTimer();
@@ -1004,9 +1241,16 @@ class RemoteVisionApp {
 
     setupDataConnection(conn) {
         conn.on('open', () => {
-            console.log('✅ Conexión de datos recibida de emisor:', conn.peer);
+            console.log('✅ Canal de datos abierto con:', conn.peer);
             this.dataConnection = conn;
             this.dataConnections.set(conn.peer, conn);
+
+            if (this.state.isEmitter) {
+                conn.send(JSON.stringify({
+                    type: 'emitter-status',
+                    streaming: this.state.isStreaming
+                }));
+            }
             
             conn.on('data', (data) => {
                 this.handleDataMessage(data);
@@ -1015,7 +1259,7 @@ class RemoteVisionApp {
             conn.on('close', () => {
                 console.log('Conexión de datos cerrada');
                 this.dataConnections.delete(conn.peer);
-                this.dataConnection = null;
+                if (this.dataConnection === conn) this.dataConnection = null;
                 if (this.state.isConnected) {
                     this.handleDisconnection();
                 }
@@ -1029,8 +1273,9 @@ class RemoteVisionApp {
 
     handleDataMessage(data) {
         try {
-            const message = JSON.parse(data);
-            
+            const message = typeof data === 'string' ? JSON.parse(data) : data;
+            if (!message || typeof message !== 'object') return;
+
             switch(message.type) {
                 case 'viewer-connected':
                     if (this.state.isEmitter) {
@@ -1062,6 +1307,16 @@ class RemoteVisionApp {
                     this.elements.latencyValue.textContent = `${latency} ms`;
                     break;
                     
+                case 'emitter-status':
+                    if (this.state.isViewer && !message.streaming && !this.state.isConnected) {
+                        this.updateViewerStatus('Esperando al emisor', 'connecting');
+                        this.updateConnectionPrompt(
+                            'EMISOR PREPARANDO CÁMARA',
+                            'No cierres esta pantalla: conectará automáticamente cuando inicie la transmisión'
+                        );
+                    }
+                    break;
+
                 case 'motion-alert':
                     this.handleMotionAlert(message);
                     break;
@@ -1072,25 +1327,60 @@ class RemoteVisionApp {
     }
 
     handleIncomingCall(call) {
-        if (this.state.isEmitter && this.localStream) {
+        if (!this.state.isEmitter) {
+            try { call.close(); } catch (error) { /* llamada inválida */ }
+            return;
+        }
+
+        if (!this.localStream) {
+            const previous = this.pendingIncomingCalls.get(call.peer);
+            if (previous && previous !== call) {
+                try { previous.close(); } catch (error) { /* sustituida */ }
+            }
+
+            this.pendingIncomingCalls.set(call.peer, call);
+            const removePending = () => {
+                if (this.pendingIncomingCalls.get(call.peer) === call) {
+                    this.pendingIncomingCalls.delete(call.peer);
+                }
+            };
+            call.on('close', removePending);
+            call.on('error', removePending);
+
+            this.broadcastData({ type: 'emitter-status', streaming: false });
+            this.updateEmitterStatus('Supervisor esperando · inicia la transmisión', 'connecting');
+            this.showNotification('Hay un supervisor esperando. Pulsa “Iniciar transmisión” cuando quieras', 'info');
+            return;
+        }
+
+        this.answerIncomingCall(call);
+    }
+
+    answerPendingIncomingCalls() {
+        if (!this.localStream || this.pendingIncomingCalls.size === 0) return;
+        const calls = Array.from(this.pendingIncomingCalls.values());
+        this.pendingIncomingCalls.clear();
+        calls.forEach(call => this.answerIncomingCall(call));
+    }
+
+    answerIncomingCall(call) {
+        if (!call || !this.localStream) return;
+
+        try {
             call.answer(this.localStream);
             this.currentCall = call;
-            
             console.log('✅ Aceptada llamada de:', call.peer);
-            
-            if (this.dataConnection) {
-                this.dataConnection.send(JSON.stringify({
-                    type: 'viewer-connected',
-                    viewerId: call.peer
-                }));
-            }
-            
+
+            this.broadcastData({
+                type: 'viewer-connected',
+                viewerId: call.peer
+            });
             this.state.connectedViewers.add(call.peer);
             this.updateConnectedClients();
-            
+
             call.on('stream', (supervisorStream) => {
                 console.log('Audio recibido del supervisor:', call.peer);
-                
+
                 if (!this.supervisorAudioElement) {
                     this.supervisorAudioElement = document.createElement('audio');
                     this.supervisorAudioElement.autoplay = true;
@@ -1098,40 +1388,34 @@ class RemoteVisionApp {
                     this.supervisorAudioElement.style.display = 'none';
                     document.body.appendChild(this.supervisorAudioElement);
                 }
-                
+
                 this.supervisorAudioElement.srcObject = supervisorStream;
-                this.supervisorAudioElement.play().catch(e => {
-                    console.log('Audio del supervisor autoplay bloqueado:', e);
+                this.supervisorAudioElement.play().catch(error => {
+                    console.log('Audio del supervisor bloqueado hasta una interacción:', error);
                 });
-                
                 this.showNotification('Supervisor habilitó audio bidireccional', 'info');
             });
-            
+
             call.on('close', () => {
-                console.log('Llamada cerrada por supervisor:', call.peer);
-                if (this.dataConnection) {
-                    this.dataConnection.send(JSON.stringify({
-                        type: 'viewer-disconnected',
-                        viewerId: call.peer
-                    }));
-                }
                 this.state.connectedViewers.delete(call.peer);
                 this.updateConnectedClients();
-                
+                if (this.currentCall === call) this.currentCall = null;
+
                 if (this.supervisorAudioElement) {
                     this.supervisorAudioElement.remove();
                     this.supervisorAudioElement = null;
                 }
             });
-            
-            call.on('error', (err) => {
-                console.error('Error en llamada con supervisor:', err);
+
+            call.on('error', (error) => {
+                console.error('Error en llamada con supervisor:', error);
                 this.state.connectedViewers.delete(call.peer);
                 this.updateConnectedClients();
+                if (this.currentCall === call) this.currentCall = null;
             });
-        } else if (this.state.isEmitter && !this.localStream) {
-            console.log('Emisor no está transmitiendo, rechazando llamada');
-            call.close();
+        } catch (error) {
+            console.error('No se pudo aceptar la llamada del supervisor:', error);
+            try { call.close(); } catch (closeError) { /* ignorado */ }
         }
     }
 
@@ -1307,7 +1591,8 @@ class RemoteVisionApp {
             this.dataConnection.close();
             this.dataConnection = null;
         }
-        
+        this.dataConnections.clear();
+
         if (this.motionPanels) this.motionPanels.viewer.detach('disconnected');
         
         if (this.remoteStream) {
@@ -1326,9 +1611,11 @@ class RemoteVisionApp {
         this.state.hostPeerId = null;
         
         this.elements.connectionOverlay.classList.remove('hidden');
-        this.elements.btnStartAudio.classList.add('hidden');
+        this.updateConnectionPrompt('ESPERANDO CONEXIÓN', 'Introduce un código para ver la transmisión en vivo');
+        this.elements.btnStartAudio.classList.remove('hidden');
         this.elements.btnStopAudio.classList.add('hidden');
         this.elements.btnStartAudio.classList.add('disabled');
+        this.elements.btnStartAudio.disabled = true;
         this.elements.btnMuteAudio.innerHTML = '<i class="fas fa-volume-up"></i> Sonido: ON';
         
         this.updateViewerStatus('Desconectado', 'disconnected');
@@ -1408,6 +1695,11 @@ class RemoteVisionApp {
 
     updateConnectionState(state) {
         this.elements.connectionState.textContent = state;
+    }
+
+    updateConnectionPrompt(title, text) {
+        if (this.elements.connectionPromptTitle) this.elements.connectionPromptTitle.textContent = title;
+        if (this.elements.connectionPromptText) this.elements.connectionPromptText.textContent = text;
     }
 
     updateQualityTag() {
@@ -1541,6 +1833,7 @@ class RemoteVisionApp {
     handleDisconnection() {
         this.state.isConnected = false;
         this.elements.connectionOverlay.classList.remove('hidden');
+        this.updateConnectionPrompt('CONEXIÓN INTERRUMPIDA', 'Intentando reconectar automáticamente…');
         this.updateViewerStatus('Desconectado', 'disconnected');
         this.updateConnectionState('Desconectado');
         this.stopUptimeTimer();
