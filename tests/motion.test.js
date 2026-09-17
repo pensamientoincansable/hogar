@@ -11,7 +11,9 @@ const {
     MotionDetector,
     AlarmSystem,
     MOTION_DEFAULTS,
-    ALARM_TYPES
+    ALARM_TYPES,
+    SOUND_LIBRARY,
+    DEFAULT_SOUND
 } = require('../motion.js');
 
 /* --------------------------------------------------------------------------
@@ -320,17 +322,18 @@ test('update() cambia sensibilidad, ritmo y enfriamiento en caliente', async () 
 test('el sistema de alarmas conoce todos los tipos soportados', () => {
     assert.deepStrictEqual(
         ALARM_TYPES,
-        ['siren', 'beep', 'voice', 'vibrate', 'flash', 'notify', 'remote', 'remote-react']
+        ['sound', 'beep', 'voice', 'vibrate', 'flash', 'notify', 'remote', 'remote-react']
     );
 
-    const system = new AlarmSystem({ types: ['siren', 'inexistente'] });
-    assert.strictEqual(system.hasType('siren'), true);
+    const system = new AlarmSystem({ types: ['sound', 'siren', 'inexistente'] });
+    assert.strictEqual(system.hasType('sound'), true);
+    assert.strictEqual(system.hasType('siren'), false, 'el tipo antiguo ya no está soportado');
     assert.strictEqual(system.hasType('inexistente'), false);
 
     system.setType('beep', true);
-    system.setType('siren', false);
+    system.setType('sound', false);
     assert.strictEqual(system.hasType('beep'), true);
-    assert.strictEqual(system.hasType('siren'), false);
+    assert.strictEqual(system.hasType('sound'), false);
 });
 
 test('no hay alarma sin tipos activados', () => {
@@ -356,90 +359,97 @@ test('la alarma remota se envía una vez y nunca en bucle', () => {
     assert.strictEqual(sent.length, 1, 'un aviso remoto no genera otro aviso');
 });
 
-test('la sirena usa WebAudio y se puede detener', () => {
+test('la biblioteca incluye exactamente todos los MP3 del repositorio', () => {
+    assert.strictEqual(Object.keys(SOUND_LIBRARY).length, 8);
+    assert.strictEqual(DEFAULT_SOUND, 'electronic-doorbell');
+    assert.deepStrictEqual(
+        Object.values(SOUND_LIBRARY).map(sound => sound.src).sort(),
+        [
+            'audio/-joy-whistle.mp3',
+            'audio/door_bell_campanello-porta.mp3',
+            'audio/doorbell-sound-effect-.mp3',
+            'audio/electronic-doorbell-sound.mp3',
+            'audio/old-style-door-bell.mp3',
+            'audio/soundreality-notification-10-158196.mp3',
+            'audio/whistle-project-5-.mp3',
+            'audio/wolf-whistle.mp3'
+        ].sort()
+    );
+});
+
+test('el sonido MP3 elegido se reproduce al volumen indicado y se puede detener', () => {
     const created = [];
 
-    class FakeNode {
-        constructor(kind) {
-            this.kind = kind;
-            this.frequency = { value: 0 };
-            this.gain = {
-                value: 0,
-                setValueAtTime: () => {},
-                exponentialRampToValueAtTime: () => {}
-            };
-            this.type = '';
-            this.started = false;
-            this.stopped = false;
+    class FakeAudio {
+        constructor(src) {
+            this.src = src;
+            this.volume = 1;
+            this.loop = false;
+            this.currentTime = 0;
+            this.played = false;
+            this.paused = false;
             created.push(this);
         }
-        connect() { return this; }
-        disconnect() {}
-        start() { this.started = true; }
-        stop() { this.stopped = true; }
-    }
-
-    class FakeAudioContext {
-        constructor() {
-            this.state = 'running';
-            this.currentTime = 0;
-            this.destination = new FakeNode('destination');
-        }
-        createOscillator() { return new FakeNode('oscillator'); }
-        createGain() { return new FakeNode('gain'); }
-        createBiquadFilter() { return new FakeNode('filter'); }
-        resume() { return Promise.resolve(); }
+        play() { this.played = true; return Promise.resolve(); }
+        pause() { this.paused = true; }
+        remove() {}
     }
 
     const previousWindow = global.window;
-    global.window = { AudioContext: FakeAudioContext };
+    global.window = { Audio: FakeAudio };
 
     try {
-        const system = new AlarmSystem({ types: ['siren'], volume: 0.8 });
+        const system = new AlarmSystem({
+            types: ['sound'],
+            sound: 'wolf-whistle',
+            volume: 0.65
+        });
         const applied = system.trigger({ source: 'local' });
 
-        assert.deepStrictEqual(applied, ['siren']);
-        assert.ok(created.some((node) => node.kind === 'oscillator' && node.started), 'la sirena arranca');
+        assert.deepStrictEqual(applied, ['sound']);
+        assert.strictEqual(created.length, 1);
+        assert.strictEqual(created[0].src, 'audio/wolf-whistle.mp3');
+        assert.strictEqual(created[0].volume, 0.65);
+        assert.strictEqual(created[0].played, true);
         assert.strictEqual(system.isRinging, true);
 
         system.stop();
-
         assert.strictEqual(system.isRinging, false);
-        assert.ok(
-            created.filter((node) => node.kind === 'oscillator').every((node) => node.stopped),
-            'detener la alarma apaga los osciladores'
-        );
+        assert.strictEqual(created[0].paused, true);
     } finally {
         if (previousWindow === undefined) delete global.window;
         else global.window = previousWindow;
     }
 });
 
-test('la sirena continua sigue activa hasta detenerla y se limita en el tiempo', async () => {
-    const system = new AlarmSystem({ types: ['siren'], continuous: true, maxContinuousMs: 900 });
-    assert.strictEqual(system.continuous, true);
+test('el sonido continuo se repite hasta detenerlo y respeta el límite de seguridad', async () => {
+    const created = [];
+    class FakeAudio {
+        constructor(src) { this.src = src; this.loop = false; created.push(this); }
+        play() { return Promise.resolve(); }
+        pause() {}
+        remove() {}
+    }
 
-    system.trigger({ source: 'local' });
+    const previousWindow = global.window;
+    global.window = { Audio: FakeAudio };
 
-    await sleep(400);
-    assert.strictEqual(system.isRinging, true, 'sigue sonando pasado el aviso visual (4 s)');
+    try {
+        const system = new AlarmSystem({
+            types: ['sound'],
+            continuous: true,
+            maxContinuousMs: 120
+        });
+        system.trigger({ source: 'local' });
+        assert.strictEqual(created[0].loop, true);
+        assert.strictEqual(system.isRinging, true);
 
-    system.stop();
-    assert.strictEqual(system.isRinging, false, 'se detiene al pulsar el botón');
-
-    // Con límite de seguridad: se apaga solo aunque nadie lo detenga
-    system.trigger({ source: 'local' });
-    await sleep(1100);
-    assert.strictEqual(system.isRinging, false, 'el límite de seguridad la apaga');
-});
-
-test('sin modo continuo la alarma termina sola', async () => {
-    const system = new AlarmSystem({ types: ['siren'], continuous: false });
-    system.trigger({ source: 'local' });
-    assert.strictEqual(system.isRinging, true);
-
-    await sleep(4300);
-    assert.strictEqual(system.isRinging, false, 'termina tras el aviso');
+        await sleep(180);
+        assert.strictEqual(system.isRinging, false, 'el límite de seguridad lo apaga');
+    } finally {
+        if (previousWindow === undefined) delete global.window;
+        else global.window = previousWindow;
+    }
 });
 
 test('las alarmas no dependen de APIs inexistentes (sin navegador)', () => {

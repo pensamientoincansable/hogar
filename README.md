@@ -1,137 +1,127 @@
+# 🔭 Visión Remota
+
+Sistema de vigilancia P2P con vídeo y audio WebRTC. Un dispositivo actúa como **emisor** y otro como **supervisor**.
+
 ## 🔧 Uso
 
-### Como Emisor (Cámara):
-1. Abre la aplicación en tu dispositivo
-2. Haz clic en "Activar como Emisor"
-3. Comparte el código que aparece
-4. Haz clic en "Iniciar Transmisión"
-5. Mantén la página abierta
+### Como Emisor (Cámara)
 
-### Como Supervisor (Visor):
-1. Abre la aplicación en otro dispositivo
-2. Haz clic en "Conectar como Supervisor"
-3. Introduce el código del emisor
-4. Haz clic en "Conectar"
-5. Usa los controles para comunicarte
+1. Abre la aplicación y pulsa **Activar como Emisor**.
+2. La cámara aparece primero y, justo debajo, se muestra el **código de acceso**.
+3. Pulsa **Iniciar transmisión** y acepta los permisos de cámara y micrófono.
+4. Comparte el código de seis caracteres y mantén la página abierta.
 
-## 🎯 Detección de Movimiento
+El código mostrado coincide siempre con el identificador activo. Si se solicita un código nuevo, la aplicación también lo vuelve a registrar en PeerJS. Para evitar errores al dictarlo no se usan los caracteres ambiguos `0/O` y `1/I`.
 
-La aplicación analiza **localmente** los fotogramas del vídeo (tanto en el emisor como en
-el supervisor) y dispara **alarmas configurables** al detectar movimiento.
+### Como Supervisor (Visor)
 
-El análisis es de **sólo lectura**: nunca modifica la cámara, el micrófono, el MediaStream
-ni la conexión WebRTC. Usa un lienzo diminuto (160×120 px) y pocos análisis por segundo,
-por lo que no afecta a la calidad ni a la estabilidad de la transmisión. Si algo falla,
-la detección se detiene sola y la transmisión continúa con normalidad.
+1. Abre la aplicación en otro dispositivo y pulsa **Conectar como Supervisor**.
+2. Introduce el código del emisor y pulsa **Conectar**.
+3. Visualiza la transmisión y usa los controles de comunicación.
+
+Los códigos se normalizan automáticamente: se aceptan mayúsculas, minúsculas, espacios y separadores. El supervisor puede conectarse **antes o después** de que el emisor inicie la cámara. Si llega antes, queda esperando y la llamada se atiende automáticamente cuando comienza la transmisión.
+
+## 🎯 Detección de movimiento
+
+La detección se ejecuta **únicamente en el modo Supervisor**. El modo Emisor no muestra controles, no crea un detector y no analiza fotogramas de la cámara local.
+
+El supervisor analiza localmente el vídeo recibido con un lienzo pequeño de 160×120 px y pocos análisis por segundo. Es un proceso de sólo lectura: nunca modifica el vídeo, el micrófono, el `MediaStream` ni la conexión WebRTC. Si el análisis falla, se detiene sin cortar la transmisión.
 
 ### Cómo usarla
 
-1. Abre el panel del emisor o del supervisor y activa el interruptor **Detección de Movimiento**
-2. Ajusta **sensibilidad**, **velocidad de análisis** (1-10 por segundo), **silencio entre
-   alarmas** (5-120 s) y **volumen**
-3. Marca los **tipos de alarma** que quieras usar
-4. Pulsa **Probar alarma** para escuchar cómo suena antes de dejarla activa
+1. En el panel del supervisor, activa **Detección de Movimiento**.
+2. Ajusta la sensibilidad, el ritmo de análisis, el silencio entre alarmas y el volumen.
+3. Selecciona un sonido de la biblioteca y los tipos de aviso deseados.
+4. Pulsa **Probar alarma** para comprobar la configuración.
 
-El medidor muestra cuánto cambia la imagen en tiempo real y dónde está el umbral de disparo;
-cuando lo supera durante varios fotogramas seguidos, se dispara la alarma (con enfriamiento
-para no repetirla en ráfaga).
+El medidor indica cuánto cambia la imagen y dónde se encuentra el umbral. Se exigen varios fotogramas consecutivos por encima del umbral y se aplica un tiempo de enfriamiento para evitar avisos en ráfaga.
 
-### Tipos de alarma
+### Sonidos incluidos
 
-| Alarma | Qué hace |
+El selector contiene todos los MP3 de la carpeta [`/audio`](audio/):
+
+- Silbido alegre (`-joy-whistle.mp3`)
+- Campanilla de puerta (`door_bell_campanello-porta.mp3`)
+- Timbre de puerta (`doorbell-sound-effect-.mp3`)
+- Timbre electrónico (`electronic-doorbell-sound.mp3`)
+- Timbre clásico (`old-style-door-bell.mp3`)
+- Notificación (`soundreality-notification-10-158196.mp3`)
+- Silbido de aviso (`whistle-project-5-.mp3`)
+- Silbido de lobo (`wolf-whistle.mp3`)
+
+El sonido puede repetirse hasta pulsar **Detener alarma**, con un límite de seguridad de 30 segundos.
+
+### Otros tipos de aviso
+
+| Aviso | Acción |
 | --- | --- |
-| 🚨 **Sirena** | Barrido sonoro continuo generado con WebAudio (no necesita archivos) |
-| 🔔 **Timbre** | Tres pitidos cortos |
-| 🗣️ **Voz** | Mensaje hablado: "Movimiento detectado" |
-| 📳 **Vibración** | Vibra el dispositivo (móviles) |
-| ⚡ **Alerta visual** | Banner rojo y parpadeo a pantalla completa + distintivo sobre el vídeo |
-| 📧 **Notificación** | Notificación del sistema (pide permiso la primera vez) |
-| 📡 **Avisar al otro dispositivo** | Envía el aviso por el canal de datos (emisor ↔ supervisor) |
-| ↩️ **Reaccionar a avisos remotos** | Dispara tus alarmas cuando avisa el otro dispositivo |
+| 🔔 **Timbre breve** | Reproduce tres pitidos cortos |
+| 🗣️ **Voz** | Pronuncia “Movimiento detectado” |
+| 📳 **Vibración** | Vibra en dispositivos compatibles |
+| ⚡ **Alerta visual** | Muestra un banner y un destello en pantalla |
+| 📧 **Notificación** | Usa las notificaciones del sistema con permiso |
+| 📡 **Avisar al emisor** | Envía el evento por el canal de datos |
+| ↩️ **Reaccionar a avisos remotos** | Procesa avisos recibidos sin reenviarlos |
 
-### Otras opciones
+El registro de eventos conserva la hora, el nivel y una captura local. Las preferencias del supervisor se guardan en el navegador.
 
-- **Sirena continua**: mantiene la sirena hasta pulsar "Detener alarma" (máximo 30 s)
-- **Registro de eventos**: guarda hora, nivel de movimiento y captura de cada evento;
-  pulsa la miniatura para descargar la evidencia
-- **Analizar con la pestaña oculta**: sigue analizando en segundo plano (consume más batería;
-  el navegador puede ralentizarlo)
-- **Sin bucles**: un aviso remoto nunca se reenvía, así que dos dispositivos avisándose
-  no se alarman mutuamente en cadena
+## ⚙️ Solución de problemas
 
-Cada dispositivo guarda sus propias preferencias (activación, sensibilidad, alarmas…) de
-forma independiente, por lo que emisor y supervisor pueden tener configuraciones distintas.
+### No se puede conectar
 
-## ⚙️ Solución de Problemas
+1. Comprueba que el emisor muestre **Código activo y listo para conectar**.
+2. Verifica los seis caracteres; no importa si se escriben en mayúsculas o minúsculas.
+3. Puedes abrir primero cualquiera de los dos dispositivos. Si el supervisor espera, inicia la transmisión en el emisor.
+4. Comprueba que ambos dispositivos tienen conexión a Internet.
+5. Si se generó un código nuevo, utiliza el último que aparece en pantalla.
 
-### Error "No se pudo conectar":
-1. **Verifica el código**: Asegúrate de que el código sea correcto
-2. **Reinicia la transmisión**: Pide al emisor que genere un nuevo código
-3. **Verifica conexión**: Ambos dispositivos deben tener internet
-4. **Recarga la página**: A veces soluciona problemas temporales
+### No se inicia la cámara o el micrófono
 
-### Error de cámara/micrófono:
-1. **Acepta los permisos**: El navegador debe pedir acceso
-2. **Verifica otros programas**: Cierra otras apps que usen la cámara
-3. **Prueba en otro navegador**: Chrome suele tener mejor soporte
+1. Acepta los permisos del navegador.
+2. Cierra otras aplicaciones que estén usando la cámara o el micrófono.
+3. La aplicación reintenta con restricciones más compatibles y, si sólo falla el micrófono, mantiene la cámara activa sin audio.
+4. Prueba con Chrome, Firefox, Edge o Safari actualizado.
 
-### Calidad de video baja:
-1. **Mejora la conexión**: Conéctate a WiFi o usa datos 4G/5G
-2. **Reduce la calidad**: En el emisor, selecciona calidad "Media"
-3. **Cierra otras apps**: Libera ancho de banda
+### Calidad de vídeo baja
 
-## 📱 Compatibilidad
+1. Usa Wi-Fi estable o una buena conexión 4G/5G.
+2. Selecciona calidad **Media (720p)** o **Baja (480p)**.
+3. Cierra otras aplicaciones que consuman ancho de banda.
 
-- ✅ Chrome 60+ (recomendado)
-- ✅ Firefox 55+
-- ✅ Edge 79+
-- ✅ Safari 11+ (iOS/macOS)
-- ✅ Opera 47+
+## 📱 Compatibilidad y diseño adaptable
 
-**Móviles compatibles**: Android 8+, iOS 11+
+La interfaz se adapta a móvil y escritorio. Los vídeos usan reproducción integrada (`playsinline`), los botones y formularios se apilan en pantallas estrechas y los controles mantienen áreas táctiles amplias.
 
-## 🔒 Privacidad y Seguridad
+- Chrome 60+
+- Firefox 55+
+- Edge 79+
+- Safari 11+ (iOS/macOS)
+- Opera 47+
 
-- **Conexión P2P**: Los datos no pasan por servidores intermedios
-- **Códigos temporales**: Cada código es único y temporal
-- **Permisos necesarios**: Solo se accede a cámara/micrófono con tu permiso
-- **Sin grabación**: No se almacenan las transmisiones
-- **Análisis local**: La detección de movimiento se ejecuta en tu dispositivo; las capturas
-  de evidencia viven sólo en la memoria de la pestaña (no se suben a ningún servidor)
+## 🔒 Privacidad y seguridad
 
-## 🆘 Soporte
-
-Si encuentras problemas:
-1. **Recarga la página**
-2. **Genera un nuevo código** (emisor)
-3. **Verifica permisos** del navegador
-4. **Prueba en modo incógnito** (sin extensiones)
+- La conexión multimedia es P2P mediante WebRTC.
+- Los códigos son temporales y sólo existen mientras el emisor está activo.
+- La cámara y el micrófono requieren permiso explícito.
+- La aplicación no graba ni sube las transmisiones.
+- El análisis y las capturas de movimiento permanecen en el supervisor.
 
 ## 🧪 Pruebas
 
 ```bash
-npm install   # sólo para desarrollo (jsdom)
+npm ci
 npm test
 ```
 
-La suite incluye 26 pruebas: el motor de detección (diferencia de fotogramas, sensibilidad,
-enfriamiento, fallos de lectura) y pruebas de integración que cargan la aplicación completa
-en jsdom y verifican que
+La suite incluye 28 pruebas del motor, los sonidos, la interfaz y la integración. Entre otras cosas verifica que:
 
-- la transmisión (getUserMedia → `<video>` → pistas) sigue intacta al activar la detección,
-- el emisor detecta movimiento, guarda evidencia, alarma y avisa al supervisor,
-- el supervisor analiza el vídeo recibido sin tocar el elemento `<video>`,
-- los avisos remotos no se reenvían (sin bucles entre dispositivos).
-
-## 🚀 Mejoras Futuras
-
-Posibles mejoras a implementar:
-- [ ] Grabación local de transmisiones
-- [ ] Chat de texto integrado
-- [ ] Modo noche (infrarrojo simulado)
-- [x] Detección de movimiento (con alarmas configurables y aviso entre dispositivos)
-- [ ] Notificaciones push
+- no existe detección de movimiento en el emisor;
+- el supervisor puede elegir y reproducir los ocho MP3;
+- la transmisión del emisor no analiza fotogramas;
+- un supervisor que conecta antes de iniciar la cámara queda en espera;
+- el código visible es el mismo que se registra y se normaliza sin distinguir mayúsculas;
+- los avisos remotos no crean bucles.
 
 ---
 
-✨ **Desarrollado con WebRTC** - Conecta dispositivos de forma directa y segura.
+✨ **Desarrollado con WebRTC** — conecta dispositivos de forma directa y segura.

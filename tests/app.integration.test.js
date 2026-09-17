@@ -149,11 +149,15 @@ function boot(t) {
     define(window.HTMLMediaElement.prototype, 'readyState', { configurable: true, get: () => 4 });
     define(window.HTMLVideoElement.prototype, 'videoWidth', { configurable: true, get: () => 160 });
     define(window.HTMLVideoElement.prototype, 'videoHeight', { configurable: true, get: () => 120 });
-    window.HTMLMediaElement.prototype.play = function () { return Promise.resolve(); };
+    /* --- Audio: registra WebAudio y los MP3 reproducidos --- */
+    const audio = { contexts: 0, oscillators: 0, filePlays: [] };
+    window.HTMLMediaElement.prototype.play = function () {
+        if (this.tagName === 'AUDIO' && /\/audio\//.test(this.src || '')) {
+            audio.filePlays.push(new window.URL(this.src).pathname);
+        }
+        return Promise.resolve();
+    };
     window.HTMLMediaElement.prototype.pause = function () {};
-
-    /* --- Audio: cuenta los osciladores creados (sirena/timbre) --- */
-    const audio = { contexts: 0, oscillators: 0 };
 
     class FakeNode {
         constructor() {
@@ -251,237 +255,190 @@ function attachFakeDataConnection(app, sent, peer = 'supervisor-1') {
 }
 
 /* ==========================================================================
- * 1. Arranque
+ * 1. Arranque e interfaz por modos
  * ======================================================================== */
 
-test('la aplicación arranca sin errores y con los dos paneles de detección', (t) => {
+test('la detección sólo existe en el supervisor y ofrece los ocho MP3', (t) => {
     const { document, app, errors } = boot(t);
 
     assert.ok(app, 'window.app debe existir');
-    assert.ok(app.motionPanels, 'los paneles de detección deben crearse');
-    assert.ok(app.motionPanels.emitter && app.motionPanels.viewer, 'emisor y supervisor');
-
-    const sections = document.querySelectorAll('#emitterMotionSection, #viewerMotionSection');
-    assert.strictEqual(sections.length, 2, 'una sección de detección por panel');
-
-    // Valores por defecto: el supervisor analiza, el emisor espera a que lo activen
+    assert.ok(app.motionPanels && app.motionPanels.viewer, 'existe el detector del supervisor');
+    assert.strictEqual(app.motionPanels.emitter, undefined, 'no se crea detector en el emisor');
+    assert.strictEqual(document.getElementById('emitterMotionSection'), null);
+    assert.strictEqual(document.getElementById('emitterMotionBadge'), null);
+    assert.ok(document.getElementById('viewerMotionSection'));
     assert.strictEqual(document.getElementById('viewerMotionToggle').checked, true);
-    assert.strictEqual(document.getElementById('emitterMotionToggle').checked, false);
 
-    // Tipos de alarma presentes en la interfaz
     const alarmOptions = document.querySelectorAll('#viewerMotionSection input[data-alarm]');
-    assert.strictEqual(alarmOptions.length, 8, 'ocho tipos de alarma configurable');
+    assert.strictEqual(alarmOptions.length, 8, 'ocho tipos de aviso configurables');
+    assert.strictEqual(
+        document.querySelector('#viewerMotionSection input[data-alarm="siren"]'),
+        null,
+        'la opción de sirena se eliminó'
+    );
 
-    // Alerta visual disponible pero oculta hasta que haya movimiento
-    assert.ok(document.getElementById('alarmOverlay').classList.contains('hidden'));
-    assert.ok(document.getElementById('btnStopAlarm').classList.contains('hidden'));
+    const sounds = document.querySelectorAll('#viewerMotionSound option');
+    assert.strictEqual(sounds.length, 8, 'aparecen todos los archivos MP3 de /audio');
+    assert.deepStrictEqual(
+        Array.from(sounds, option => option.value),
+        [
+            'joy-whistle', 'door-bell-campanello', 'doorbell-effect',
+            'electronic-doorbell', 'old-door-bell', 'notification-10',
+            'whistle-project', 'wolf-whistle'
+        ]
+    );
 
-    // Sin vídeo todavía, la detección no debe estar analizando nada
-    assert.strictEqual(app.motionPanels.viewer.detector.isRunning, false);
-    assert.strictEqual(app.motionPanels.emitter.detector.isRunning, false);
-
-    // Todos los id que motion.js espera deben existir para cada panel: si se
-    // renombra algo en el HTML, esta prueba lo detecta al instante.
     const suffixes = [
         'MotionSection', 'MotionToggle', 'MotionState', 'MotionStateIcon', 'MotionStateText',
         'MotionLevel', 'MotionBar', 'MotionThreshold', 'MotionCount', 'LastMotion',
         'MotionBadge', 'MotionSensitivity', 'MotionSensitivityValue', 'MotionRate',
         'MotionRateValue', 'MotionCooldown', 'MotionCooldownValue', 'MotionVolume',
-        'MotionVolumeValue', 'MotionContinuous', 'MotionBackground', 'BtnTestAlarm',
-        'BtnClearLog', 'MotionLog', 'MotionLogEmpty'
+        'MotionVolumeValue', 'MotionSound', 'MotionContinuous', 'MotionBackground',
+        'BtnTestAlarm', 'BtnClearLog', 'MotionLog', 'MotionLogEmpty'
     ];
-
-    for (const prefix of ['emitter', 'viewer']) {
-        for (const suffix of suffixes) {
-            assert.ok(
-                document.getElementById(prefix + suffix),
-                `falta el elemento #${prefix}${suffix}`
-            );
-        }
+    for (const suffix of suffixes) {
+        assert.ok(document.getElementById('viewer' + suffix), `falta #viewer${suffix}`);
     }
 
-    // Y el módulo debe encontrarlos todos (una errata en un id se detecta aquí)
-    for (const key of ['emitter', 'viewer']) {
-        const found = app.motionPanels[key]._elements;
-        for (const [name, element] of Object.entries(found)) {
-            if (name === 'alarmCheckboxes') continue;
-            assert.ok(element, `motion.js no encuentra el control "${name}" del panel ${key}`);
-        }
-        assert.strictEqual(found.alarmCheckboxes.length, 8, 'ocho casillas de tipo de alarma');
-    }
-
-    assert.ok(document.getElementById('alarmOverlay'), 'existe la capa de alerta visual');
-    assert.ok(document.getElementById('alarmBannerTitle'), 'existe el texto del banner');
-    assert.ok(document.getElementById('btnStopAlarm'), 'existe el botón de detener alarma');
-
+    assert.strictEqual(app.motionPanels.viewer.detector.isRunning, false);
+    assert.ok(document.getElementById('alarmOverlay').classList.contains('hidden'));
     assert.deepStrictEqual(errors, []);
 });
 
-/* ==========================================================================
- * 2. La transmisión sigue funcionando exactamente igual
- * ======================================================================== */
-
-test('la transmisión del emisor no se altera al activar la detección', async (t) => {
+test('el emisor ordena cámara, código y ajustes, y transmite sin analizar movimiento', async (t) => {
     const { app, document, errors, state } = boot(t);
 
     await app.setEmitterMode();
     assert.strictEqual(app.state.isEmitter, true);
+    assert.strictEqual(app.state.currentCode, app.state.displayCode);
+    assert.match(app.state.currentCode, /^[A-HJ-NP-Z2-9]{6}$/);
+    assert.ok(document.getElementById('emitterCodeStatus').classList.contains('ready'));
+
+    const content = document.querySelector('#emitterPanel .panel-content');
+    const children = Array.from(content.children);
+    assert.ok(children[0].classList.contains('video-section'));
+    assert.ok(children[1].classList.contains('code-section'));
+    assert.ok(children[2].classList.contains('controls-section'));
 
     await app.startEmitter();
-
-    // La cámara y el vídeo local funcionan como antes
     assert.strictEqual(app.state.isStreaming, true);
-    assert.ok(app.localStream, 'el stream local existe');
+    assert.ok(app.localStream);
     assert.strictEqual(app.elements.localVideo.srcObject, app.localStream);
     assert.strictEqual(app.elements.localVideo.muted, true);
-    assert.ok(app.localStream.__tracks.every((track) => !track.stopped), 'ninguna pista detenida');
+    assert.ok(app.localStream.__tracks.every(track => !track.stopped));
+    assert.strictEqual(state.drawings, 0, 'el emisor nunca lee fotogramas para detectar movimiento');
+    assert.strictEqual(app.elements.btnRefreshCode.disabled, true);
 
-    // Ahora el usuario activa la detección
-    const toggle = document.getElementById('emitterMotionToggle');
-    toggle.checked = true;
-    toggle.dispatchEvent(new app.elements.localVideo.ownerDocument.defaultView.Event('change'));
-
-    assert.strictEqual(app.motionPanels.emitter.enabled, true);
-    assert.strictEqual(app.motionPanels.emitter.detector.isRunning, true);
-
-    // El primer análisis tarda un poco (333 ms por defecto)
-    assert.ok(await waitFor(() => state.drawings > 0, 2000), 'el detector lee fotogramas');
-
-    // El análisis no puede tocar el stream ni el vídeo
-    assert.strictEqual(app.elements.localVideo.srcObject, app.localStream);
-    assert.ok(app.localStream.__tracks.every((track) => !track.stopped), 'las pistas siguen vivas');
-    assert.strictEqual(app.state.isStreaming, true);
-
-    // ...y al detener la transmisión, la detección se para sola
+    const stream = app.localStream;
     app.stopEmitter();
-
-    assert.strictEqual(app.motionPanels.emitter.detector.isRunning, false);
     assert.strictEqual(app.state.isStreaming, false);
-    assert.ok(app.localStream === null, 'el stream se libera al detener');
-
+    assert.strictEqual(app.localStream, null);
+    assert.ok(stream.__tracks.every(track => track.stopped));
+    assert.strictEqual(app.elements.btnRefreshCode.disabled, false);
     assert.deepStrictEqual(errors, []);
 });
 
 /* ==========================================================================
- * 3. Detección real en el emisor: registro, alarma y aviso remoto
+ * 2. Código de acceso y orden de conexión
  * ======================================================================== */
 
-test('el emisor detecta movimiento, guarda evidencia, alarma y avisa al supervisor', async (t) => {
-    const { app, document, errors, sent, audio, state } = boot(t);
+test('el código ignora mayúsculas, espacios y separadores, y el código visible siempre está activo', async (t) => {
+    const { app, document, window, errors } = boot(t);
+
+    assert.strictEqual(app.normalizeAccessCode(' a1-b 2_c3 '), 'A1B2C3');
+    const input = document.getElementById('peerCodeInput');
+    input.value = 'ab-12 cd';
+    input.dispatchEvent(new window.Event('input'));
+    assert.strictEqual(input.value, 'AB12CD');
+
+    let connectedCode = null;
+    app.attemptConnection = async code => { connectedCode = code; return true; };
+    input.value = 'xy9z8q';
+    await app.connectToEmitter();
+    assert.strictEqual(connectedCode, 'XY9Z8Q', 'la conexión recibe siempre el código normalizado');
 
     await app.setEmitterMode();
+    const previous = app.state.currentCode;
+    await app.refreshEmitterCode();
+
+    assert.notStrictEqual(app.state.currentCode, previous);
+    assert.strictEqual(app.state.currentCode, app.state.displayCode);
+    assert.strictEqual(app.peer.id, app.state.currentCode, 'PeerJS usa exactamente el código mostrado');
+    assert.strictEqual(document.getElementById('emitterCode').textContent, app.state.currentCode);
+    assert.ok(document.getElementById('emitterCodeStatus').classList.contains('ready'));
+    assert.deepStrictEqual(errors, []);
+});
+
+test('un supervisor que llega antes de iniciar la cámara queda esperando y se atiende al arrancar', async (t) => {
+    const { app, errors } = boot(t);
+    await app.setEmitterMode();
+
+    const handlers = {};
+    const call = {
+        peer: 'supervisor-temprano',
+        answeredWith: null,
+        closed: false,
+        on(event, handler) { (handlers[event] = handlers[event] || []).push(handler); return this; },
+        answer(stream) { this.answeredWith = stream; },
+        close() { this.closed = true; (handlers.close || []).forEach(handler => handler()); }
+    };
+
+    app.handleIncomingCall(call);
+    assert.strictEqual(call.closed, false, 'no se rechaza la llamada temprana');
+    assert.strictEqual(app.pendingIncomingCalls.get(call.peer), call);
+
     await app.startEmitter();
-
-    // Hay un supervisor conectado por el canal de datos
-    const connection = attachFakeDataConnection(app, sent);
-
-    // El usuario activa la detección en el emisor
-    const toggle = document.getElementById('emitterMotionToggle');
-    toggle.checked = true;
-    toggle.dispatchEvent(new (app.elements.localVideo.ownerDocument.defaultView.Event)('change'));
-
-    const detected = await waitFor(() => document.getElementById('emitterMotionCount').textContent === '1');
-
-    assert.ok(detected, 'debe registrarse un evento de movimiento');
-    assert.ok(state.frame > 3, 'el motor analizó varios fotogramas');
-
-    // Registro de eventos con evidencia
-    const entries = document.querySelectorAll('#emitterMotionLog .motion-log-item');
-    assert.strictEqual(entries.length, 1);
-    assert.ok(document.querySelector('#emitterMotionLog img.motion-thumb'), 'guardó la captura de evidencia');
-
-    // Se disparó la alarma (el emisor tiene sirena + alerta visual activadas por defecto)
-    assert.ok(audio.oscillators > 0, 'la sirena usa WebAudio');
-    assert.strictEqual(document.getElementById('alarmOverlay').classList.contains('hidden'), false);
-    assert.ok(document.getElementById('emitterMotionBadge').classList.contains('motion') ||
-        document.getElementById('emitterMotionBadge').classList.contains('hidden') === false);
-
-    // Se avisó al supervisor por el canal de datos
-    const alerts = connection.sent.map((message) => JSON.parse(message));
-    const motionAlert = alerts.find((message) => message.type === 'motion-alert');
-    assert.ok(motionAlert, 'debe enviarse un aviso de movimiento');
-    assert.strictEqual(motionAlert.source, 'emitter');
-    assert.ok(motionAlert.percent > 0);
-
-    // Y la transmisión sigue intacta
-    assert.strictEqual(app.elements.localVideo.srcObject, app.localStream);
-    assert.ok(app.localStream.__tracks.every((track) => !track.stopped));
-    assert.strictEqual(app.motionPanels.emitter.detector.isRunning, true);
-
-    // El botón de detener alarma funciona
-    app.stopAllAlarms();
-    assert.ok(document.getElementById('btnStopAlarm').classList.contains('hidden'));
-
+    assert.strictEqual(call.answeredWith, app.localStream, 'se responde con la cámara al estar lista');
+    assert.strictEqual(app.pendingIncomingCalls.size, 0);
+    assert.ok(app.state.connectedViewers.has(call.peer));
     assert.deepStrictEqual(errors, []);
 });
 
 /* ==========================================================================
- * 4. Avisos remotos: reacción sin bucle
+ * 3. Detección y alarmas en el supervisor
  * ======================================================================== */
 
-test('el supervisor reacciona a un aviso remoto sin reenviarlo (sin bucles)', async (t) => {
-    const { app, document, sent, errors } = boot(t);
+test('el supervisor detecta movimiento, registra evidencia y reproduce el MP3 elegido', async (t) => {
+    const { app, document, window, audio, state, errors } = boot(t);
+    await app.setViewerMode();
 
+    const sound = document.getElementById('viewerMotionSound');
+    sound.value = 'wolf-whistle';
+    sound.dispatchEvent(new window.Event('change'));
+    assert.strictEqual(app.motionPanels.viewer.settings.sound, 'wolf-whistle');
+
+    const remoteVideo = app.elements.remoteVideo;
+    app.motionPanels.viewer.attach();
+    const detected = await waitFor(() => document.getElementById('viewerMotionCount').textContent === '1');
+
+    assert.ok(detected, 'se detecta el movimiento del vídeo remoto');
+    assert.ok(state.frame > 3);
+    assert.strictEqual(remoteVideo.srcObject, null, 'el detector sólo lee el elemento de vídeo');
+    assert.ok(document.querySelector('#viewerMotionLog img.motion-thumb'));
+    assert.ok(audio.filePlays.some(pathname => pathname.endsWith('/audio/wolf-whistle.mp3')));
+    assert.strictEqual(document.getElementById('alarmOverlay').classList.contains('hidden'), false);
+    assert.deepStrictEqual(errors, []);
+});
+
+test('el supervisor reacciona a un aviso remoto sin reenviarlo', async (t) => {
+    const { app, document, sent, errors } = boot(t);
     await app.setViewerMode();
     const connection = attachFakeDataConnection(app, sent, 'emisor');
 
-    app.handleMotionAlert({ percent: 4.25, thresholdPercent: 1.2, source: 'emitter' });
+    app.handleMotionAlert({ percent: 4.25, thresholdPercent: 1.2, source: 'remote' });
 
-    const entry = document.querySelector('#viewerMotionLog .motion-log-item.remote');
-    assert.ok(entry, 'el evento remoto aparece en el registro');
+    assert.ok(document.querySelector('#viewerMotionLog .motion-log-item.remote'));
     assert.strictEqual(document.getElementById('viewerMotionCount').textContent, '1');
-    assert.ok(
-        document.getElementById('alarmOverlay').classList.contains('hidden') === false,
-        'la alerta visual se muestra'
-    );
-
-    // No se reenvía el aviso: nada de bucles entre dispositivos
+    assert.strictEqual(document.getElementById('alarmOverlay').classList.contains('hidden'), false);
     const forwarded = connection.sent
-        .map((message) => JSON.parse(message))
-        .filter((message) => message.type === 'motion-alert');
-    assert.strictEqual(forwarded.length, 0, 'un aviso remoto nunca se reenvía');
-
+        .map(message => JSON.parse(message))
+        .filter(message => message.type === 'motion-alert');
+    assert.strictEqual(forwarded.length, 0, 'no se crean bucles de avisos');
     assert.deepStrictEqual(errors, []);
 });
 
-/* ==========================================================================
- * 5. El supervisor analiza el vídeo remoto sin tocar el <video>
- * ======================================================================== */
-
-test('el supervisor detecta movimiento en el vídeo recibido sin modificar el elemento', async (t) => {
-    const { app, document, errors } = boot(t);
-
-    await app.setViewerMode();
-
-    const remoteVideo = app.elements.remoteVideo;
-    assert.strictEqual(remoteVideo.srcObject, null, 'sin conexión todavía');
-
-    // El panel del supervisor está activado por defecto
-    app.motionPanels.viewer.attach();
-    assert.strictEqual(app.motionPanels.viewer.detector.isRunning, true);
-
-    const detected = await waitFor(() => document.getElementById('viewerMotionCount').textContent === '1');
-
-    assert.ok(detected, 'el supervisor detecta el movimiento del vídeo remoto');
-
-    // El detector sólo lee: nunca asigna srcObject ni pistas
-    assert.strictEqual(remoteVideo.srcObject, null);
-    assert.ok(document.querySelector('#viewerMotionLog .motion-log-item.local'));
-
-    const detector = app.motionPanels.viewer.detector;
-    assert.strictEqual(detector.video, remoteVideo, 'analiza el vídeo remoto');
-    assert.ok(detector.frames > 3, 'analizó fotogramas de verdad');
-
-    assert.deepStrictEqual(errors, []);
-});
-
-/* ==========================================================================
- * 6. Sensibilidad y ajustes desde la interfaz
- * ======================================================================== */
-
-test('los controles de sensibilidad, ritmo y enfriamiento se aplican y se guardan', async (t) => {
+test('los controles del supervisor aplican y guardan sensibilidad, ritmo, volumen y sonido', (t) => {
     const { app, document, window, errors } = boot(t);
-
     const panel = app.motionPanels.viewer;
     const setRange = (id, value) => {
         const input = document.getElementById(id);
@@ -492,58 +449,43 @@ test('los controles de sensibilidad, ritmo y enfriamiento se aplican y se guarda
     setRange('viewerMotionSensitivity', 9);
     setRange('viewerMotionRate', 5);
     setRange('viewerMotionCooldown', 45);
+    setRange('viewerMotionVolume', 60);
+    const sound = document.getElementById('viewerMotionSound');
+    sound.value = 'old-door-bell';
+    sound.dispatchEvent(new window.Event('change'));
 
-    assert.strictEqual(panel.settings.sensitivity, 9);
     assert.strictEqual(panel.detector.options.sensitivity, 9);
-    assert.strictEqual(panel.detector.threshold, app.motionPanels.viewer.detector.threshold);
-    assert.strictEqual(panel.detector.options.intervalMs, 200, '5 análisis por segundo');
-    assert.strictEqual(panel.detector.options.cooldownMs, 45000, '45 s de silencio');
+    assert.strictEqual(panel.detector.options.intervalMs, 200);
+    assert.strictEqual(panel.detector.options.cooldownMs, 45000);
+    assert.strictEqual(panel.alarms.volume, 0.6);
+    assert.strictEqual(panel.alarms.sound, 'old-door-bell');
     assert.strictEqual(document.getElementById('viewerMotionSensitivityValue').textContent, 'Muy alta');
-    assert.ok(panel.detector.threshold < 0.01, 'sensibilidad 9 → umbral muy bajo');
 
-    // Las preferencias se guardan por rol
     const stored = JSON.parse(window.localStorage.getItem('visionMotionSettings'));
-    assert.strictEqual(stored.viewer.sensitivity, 9);
+    assert.strictEqual(stored.viewer.sound, 'old-door-bell');
     assert.strictEqual(stored.viewer.cooldown, 45);
-
-    // Cambiar los tipos de alarma afecta al sistema de alarmas
-    const siren = document.querySelector('#viewerMotionSection input[data-alarm="siren"]');
-    siren.checked = true;
-    siren.dispatchEvent(new window.Event('change'));
-    assert.strictEqual(panel.alarms.hasType('siren'), true);
-
+    assert.strictEqual(stored.viewer.alarms.siren, undefined, 'no persiste el tipo eliminado');
     assert.deepStrictEqual(errors, []);
 });
 
-/* ==========================================================================
- * 7. Botones de prueba de alarma y de limpieza del registro
- * ======================================================================== */
+test('probar alarma usa el sonido seleccionado y limpiar registro reinicia los contadores', async (t) => {
+    const { app, document, window, audio, errors } = boot(t);
+    await app.setViewerMode();
 
-test('los botones de probar alarma y limpiar registro funcionan', async (t) => {
-    const { app, document, errors } = boot(t);
-    const panel = app.motionPanels.viewer;
-
-    // Probar alarma → se muestra la alerta visual configurada por defecto
+    const sound = document.getElementById('viewerMotionSound');
+    sound.value = 'notification-10';
+    sound.dispatchEvent(new window.Event('change'));
     document.getElementById('viewerBtnTestAlarm').click();
-    assert.strictEqual(panel.alarms.isRinging, true, 'la alarma está sonando');
-    assert.strictEqual(
-        document.getElementById('alarmOverlay').classList.contains('hidden'), false,
-        'la alerta visual aparece en pantalla'
-    );
 
+    assert.strictEqual(app.motionPanels.viewer.alarms.isRinging, true);
+    assert.ok(audio.filePlays.some(pathname => pathname.endsWith('/audio/soundreality-notification-10-158196.mp3')));
     app.stopAllAlarms();
-    assert.strictEqual(panel.alarms.isRinging, false);
-    assert.ok(document.getElementById('alarmOverlay').classList.contains('hidden'));
+    assert.strictEqual(app.motionPanels.viewer.alarms.isRinging, false);
 
-    // Registro: se llena con un aviso remoto y se vacía con el botón
     app.handleMotionAlert({ percent: 2.5, thresholdPercent: 1.2 });
     assert.strictEqual(document.querySelectorAll('#viewerMotionLog .motion-log-item').length, 1);
-    assert.strictEqual(document.getElementById('viewerMotionCount').textContent, '1');
-    assert.notStrictEqual(document.getElementById('viewerLastMotion').textContent, '--:--:--');
-
     document.getElementById('viewerBtnClearLog').click();
     assert.strictEqual(document.querySelectorAll('#viewerMotionLog .motion-log-item').length, 0);
     assert.strictEqual(document.getElementById('viewerMotionCount').textContent, '0');
-
     assert.deepStrictEqual(errors, []);
 });

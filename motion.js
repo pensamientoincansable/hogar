@@ -14,8 +14,8 @@
  * Contenido:
  *   MotionDetector → motor de detección (diferencia de fotogramas en escala de
  *                    grises, con compensación de cambios globales de luz).
- *   AlarmSystem    → reproduce los distintos tipos de alarma (sirena, timbre,
- *                    voz, vibración, alerta visual, notificación, aviso remoto).
+ *   AlarmSystem    → reproduce los sonidos MP3 incluidos, timbre, voz,
+ *                    vibración, alerta visual, notificación y aviso remoto.
  *   MotionPanel    → une el motor con el panel de interfaz y las preferencias.
  * ========================================================================== */
 (function (root, factory) {
@@ -52,9 +52,47 @@
         canvasFactory: null         // inyectable para pruebas
     };
 
+    /** Todos los archivos reproducibles que existen en /audio. */
+    const SOUND_LIBRARY = {
+        'joy-whistle': {
+            label: 'Silbido alegre',
+            src: 'audio/-joy-whistle.mp3'
+        },
+        'door-bell-campanello': {
+            label: 'Campanilla de puerta',
+            src: 'audio/door_bell_campanello-porta.mp3'
+        },
+        'doorbell-effect': {
+            label: 'Timbre de puerta',
+            src: 'audio/doorbell-sound-effect-.mp3'
+        },
+        'electronic-doorbell': {
+            label: 'Timbre electrónico',
+            src: 'audio/electronic-doorbell-sound.mp3'
+        },
+        'old-door-bell': {
+            label: 'Timbre clásico',
+            src: 'audio/old-style-door-bell.mp3'
+        },
+        'notification-10': {
+            label: 'Notificación',
+            src: 'audio/soundreality-notification-10-158196.mp3'
+        },
+        'whistle-project': {
+            label: 'Silbido de aviso',
+            src: 'audio/whistle-project-5-.mp3'
+        },
+        'wolf-whistle': {
+            label: 'Silbido de lobo',
+            src: 'audio/wolf-whistle.mp3'
+        }
+    };
+
+    const DEFAULT_SOUND = 'electronic-doorbell';
+
     const ALARM_TYPES = [
-        'siren',        // sirena sonora (WebAudio, sin archivos externos)
-        'beep',         // timbre corto
+        'sound',        // uno de los archivos MP3 de SOUND_LIBRARY
+        'beep',         // timbre corto generado con WebAudio
         'voice',        // voz sintetizada ("Movimiento detectado")
         'vibrate',      // vibración del dispositivo
         'flash',        // alerta visual a pantalla completa
@@ -64,8 +102,8 @@
     ];
 
     const ALARM_LABELS = {
-        siren: 'Sirena',
-        beep: 'Timbre',
+        sound: 'Sonido seleccionado',
+        beep: 'Timbre breve',
         voice: 'Voz de alerta',
         vibrate: 'Vibración',
         flash: 'Alerta visual',
@@ -77,17 +115,11 @@
     const MOTION_STORAGE_KEY = 'visionMotionSettings';
 
     const PANEL_DEFAULTS = {
-        emitter: {
-            enabled: false,
-            alarms: {
-                siren: true, beep: false, voice: false, vibrate: true,
-                flash: true, notify: true, remote: true, 'remote-react': true
-            }
-        },
         viewer: {
             enabled: true,
+            sound: DEFAULT_SOUND,
             alarms: {
-                siren: false, beep: false, voice: false, vibrate: true,
+                sound: true, beep: false, voice: false, vibrate: true,
                 flash: true, notify: true, remote: true, 'remote-react': true
             }
         }
@@ -561,6 +593,7 @@
             this.types = new Set(Array.from(options.types || []).filter((type) => ALARM_TYPES.includes(type)));
             this.volume = options.volume === undefined ? 0.8 : clamp(options.volume, 0, 1);
             this.continuous = !!options.continuous;
+            this.sound = SOUND_LIBRARY[options.sound] ? options.sound : DEFAULT_SOUND;
             this.voiceText = options.voiceText || 'Movimiento detectado';
             this.maxContinuousMs = options.maxContinuousMs || 30000;
             this.onRemoteAlert = options.onRemoteAlert || null;
@@ -568,6 +601,7 @@
 
             this.audioContext = null;
             this._nodes = [];
+            this._audioElements = [];
             this._timers = [];
             this._endTimer = null;
             this._ringing = false;
@@ -605,6 +639,15 @@
             this.continuous = !!enabled;
             if (!this.continuous && this._ringing) this.stop();
             return this;
+        }
+
+        setSound(sound) {
+            if (SOUND_LIBRARY[sound]) this.sound = sound;
+            return this;
+        }
+
+        getSound() {
+            return SOUND_LIBRARY[this.sound] || SOUND_LIBRARY[DEFAULT_SOUND];
         }
 
         /* ---------- Permisos ---------- */
@@ -651,8 +694,8 @@
             for (const type of types) {
                 try {
                     switch (type) {
-                        case 'siren':
-                            this._siren(this.continuous ? this.maxContinuousMs : 2500);
+                        case 'sound':
+                            this._playSound();
                             applied.push(type);
                             break;
                         case 'beep':
@@ -709,7 +752,7 @@
                     this._endTimer = null;
                 }
 
-                const continuousAlarm = this.continuous && (this.types.has('siren') || this.types.has('beep'));
+                const continuousAlarm = this.continuous && (this.types.has('sound') || this.types.has('beep'));
 
                 if (continuousAlarm) {
                     // Sigue sonando hasta pulsar "Detener alarma", con límite de seguridad
@@ -733,7 +776,7 @@
             const types = new Set(this.types);
             if (types.size === 0) {
                 types.add('flash');
-                types.add('beep');
+                types.add('sound');
             }
             const backup = this.types;
             this.types = types;
@@ -753,6 +796,15 @@
                 } catch (error) { /* ignorado a propósito */ }
             }
             this._nodes = [];
+
+            for (const audio of this._audioElements) {
+                try {
+                    audio.pause();
+                    audio.currentTime = 0;
+                    if (typeof audio.remove === 'function') audio.remove();
+                } catch (error) { /* ignorado a propósito */ }
+            }
+            this._audioElements = [];
 
             for (const timer of this._timers) clearTimeout(timer);
             this._timers = [];
@@ -822,46 +874,37 @@
             }
         }
 
-        /** Sirena: barrido continuo de frecuencia (no requiere archivos de audio). */
-        _siren(durationMs) {
-            const ctx = this._ensureAudio();
-            if (!ctx) return;
+        /** Reproduce el MP3 elegido de la biblioteca local de /audio. */
+        _playSound() {
+            const sound = this.getSound();
+            const AudioCtor = typeof Audio !== 'undefined'
+                ? Audio
+                : (typeof window !== 'undefined' ? window.Audio : null);
 
-            const now = ctx.currentTime;
-            const duration = Math.max(0.3, (durationMs || 2500) / 1000);
-            const end = now + duration;
-            const level = clamp(this.volume, 0, 1) * 0.32;
+            let audio = null;
+            try {
+                if (AudioCtor) {
+                    audio = new AudioCtor(sound.src);
+                } else if (hasDocument()) {
+                    audio = document.createElement('audio');
+                    audio.src = sound.src;
+                }
 
-            const oscillator = ctx.createOscillator();
-            const gain = ctx.createGain();
-            const lfo = ctx.createOscillator();
-            const lfoGain = ctx.createGain();
-            const filter = ctx.createBiquadFilter();
+                if (!audio) return;
+                audio.preload = 'auto';
+                audio.volume = clamp(this.volume, 0, 1);
+                audio.loop = !!this.continuous;
+                this._audioElements.push(audio);
 
-            oscillator.type = 'sawtooth';
-            oscillator.frequency.value = 760;
-
-            lfo.type = 'sine';
-            lfo.frequency.value = 1.7;   // 1.7 barridos por segundo
-            lfoGain.gain.value = 330;
-
-            filter.type = 'lowpass';
-            filter.frequency.value = 3600;
-
-            oscillator.connect(filter);
-            filter.connect(gain);
-            gain.connect(ctx.destination);
-            lfo.connect(lfoGain);
-            lfoGain.connect(oscillator.frequency);
-
-            this._envelope(gain, now, end, level);
-
-            oscillator.start(now);
-            lfo.start(now);
-            oscillator.stop(end + 0.05);
-            lfo.stop(end + 0.05);
-
-            this._nodes.push(oscillator, lfo, gain, lfoGain, filter);
+                const result = audio.play();
+                if (result && typeof result.catch === 'function') {
+                    result.catch(() => {});
+                }
+            } catch (error) {
+                if (audio) {
+                    this._audioElements = this._audioElements.filter((item) => item !== audio);
+                }
+            }
         }
 
         /** Timbre: tres pitidos cortos. */
@@ -956,7 +999,7 @@
 
             const stopButton = document.getElementById('btnStopAlarm');
             if (stopButton) {
-                if (this.continuous && (this.types.has('siren') || this.types.has('beep'))) {
+                if (this.continuous && (this.types.has('sound') || this.types.has('beep'))) {
                     stopButton.classList.remove('hidden');
                 } else {
                     stopButton.classList.add('hidden');
@@ -1032,6 +1075,7 @@
                 types: this._enabledAlarmTypes(),
                 volume: this.settings.volume / 100,
                 continuous: this.settings.continuous,
+                sound: this.settings.sound,
                 onRemoteAlert: typeof config.sendRemoteAlert === 'function' ? config.sendRemoteAlert : null,
                 onStateChange: (state) => this._onAlarmState(state)
             };
@@ -1061,6 +1105,15 @@
         _defaultSettings() {
             const defaults = PANEL_DEFAULTS[this.role] || PANEL_DEFAULTS.viewer;
             const stored = this._loadStored();
+            const storedAlarms = stored && stored.alarms ? stored.alarms : {};
+            const alarms = {};
+
+            // Migra configuraciones antiguas y descarta tipos que ya no existen.
+            for (const type of ALARM_TYPES) {
+                alarms[type] = typeof storedAlarms[type] === 'boolean'
+                    ? storedAlarms[type]
+                    : !!defaults.alarms[type];
+            }
 
             return {
                 enabled: stored && typeof stored.enabled === 'boolean' ? stored.enabled : defaults.enabled,
@@ -1070,7 +1123,8 @@
                 volume: stored && typeof stored.volume === 'number' ? stored.volume : 75,
                 continuous: stored ? !!stored.continuous : false,
                 background: stored ? !!stored.background : false,
-                alarms: Object.assign({}, defaults.alarms, (stored && stored.alarms) || {})
+                sound: stored && SOUND_LIBRARY[stored.sound] ? stored.sound : defaults.sound,
+                alarms
             };
         }
 
@@ -1133,6 +1187,7 @@
                 cooldownValue: $('MotionCooldownValue'),
                 volume: $('MotionVolume'),
                 volumeValue: $('MotionVolumeValue'),
+                sound: $('MotionSound'),
                 continuous: $('MotionContinuous'),
                 background: $('MotionBackground'),
                 testAlarm: $('BtnTestAlarm'),
@@ -1189,6 +1244,12 @@
                 });
             }
 
+            if (elements.sound) {
+                elements.sound.addEventListener('change', () => {
+                    this.updateSettings({ sound: elements.sound.value });
+                });
+            }
+
             if (elements.continuous) {
                 elements.continuous.addEventListener('change', () => {
                     this.updateSettings({ continuous: elements.continuous.checked });
@@ -1219,9 +1280,6 @@
                                 this.notify('Notificaciones del sistema activadas', 'success');
                             }
                         });
-                    }
-                    if (checkbox.checked && type === 'siren' && this.role === 'emitter') {
-                        this.notify('La sirena del emisor puede oírse en la transmisión (micrófono)', 'info');
                     }
                 });
             }
@@ -1276,6 +1334,7 @@
             if (elements.volume) elements.volume.value = settings.volume;
             show(elements.volumeValue, settings.volume + '%');
 
+            if (elements.sound) elements.sound.value = settings.sound;
             if (elements.continuous) elements.continuous.checked = !!settings.continuous;
             if (elements.background) elements.background.checked = !!settings.background;
 
@@ -1303,6 +1362,7 @@
 
             this.alarms.setTypes(this._enabledAlarmTypes());
             this.alarms.setVolume(this.settings.volume / 100);
+            this.alarms.setSound(this.settings.sound);
             this.alarms.setContinuous(this.settings.continuous);
 
             if (this.detector.isRunning) this.detector.start(this._video);
@@ -1588,6 +1648,8 @@
         MOTION_DEFAULTS,
         ALARM_TYPES,
         ALARM_LABELS,
+        SOUND_LIBRARY,
+        DEFAULT_SOUND,
         MOTION_STORAGE_KEY
     };
 });
