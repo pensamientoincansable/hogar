@@ -82,6 +82,13 @@ El registro de eventos conserva la hora, el nivel y una captura local. Las prefe
 3. La aplicación reintenta con restricciones más compatibles y, si sólo falla el micrófono, mantiene la cámara activa sin audio.
 4. Prueba con Chrome, Firefox, Edge o Safari actualizado.
 
+### Se oye audio pero no se ve la imagen
+
+1. Comprueba que la imagen se ve en el propio emisor y que la cámara no está tapada o bloqueada por el sistema.
+2. Actualiza la página en ambos dispositivos, inicia la transmisión y vuelve a conectar. Si el navegador bloquea la reproducción, toca la pantalla.
+3. Revisa los permisos de cámara del sitio en el navegador y en el sistema operativo. Si se denegaron anteriormente, habilítalos en ajustes y recarga.
+4. Prueba ambos dispositivos con navegadores actualizados y otra red. Algunas redes bloquean WebRTC; esta instalación usa STUN pero no dispone de servidor TURN, por lo que no todas las redes pueden conectarse.
+
 ### Calidad de vídeo baja
 
 1. Usa Wi-Fi estable o una buena conexión 4G/5G.
@@ -92,11 +99,9 @@ El registro de eventos conserva la hora, el nivel y una captura local. Las prefe
 
 La interfaz se adapta a móvil y escritorio. Los vídeos usan reproducción integrada (`playsinline`), los botones y formularios se apilan en pantallas estrechas y los controles mantienen áreas táctiles amplias.
 
-- Chrome 60+
-- Firefox 55+
-- Edge 79+
-- Safari 11+ (iOS/macOS)
-- Opera 47+
+Se recomiendan versiones actuales de Chrome, Firefox, Edge, Opera y Safari en escritorio y móviles; no se garantiza el funcionamiento de todas las versiones o dispositivos. Internet Explorer y navegadores antiguos o integrados en otras aplicaciones pueden ser incompatibles. En iOS/iPadOS, Safari admite WebRTC desde iOS 11; la captura en otros navegadores basados en WKWebView requiere iOS 14.3 o posterior y depende de la aplicación. La reproducción automática con sonido puede requerir tocar la pantalla.
+
+La cámara y el micrófono exigen **HTTPS o localhost** y autorización del usuario tanto en el navegador como, cuando corresponda, en el sistema operativo. Una dirección HTTP de red local no es localhost. El navegador puede recordar una autorización y no volver a preguntar; la web no puede saltarse el permiso. El supervisor también puede solicitar micrófono para comunicación bidireccional. PeerJS se carga desde un CDN y necesita acceso a su servidor de señalización y a Internet.
 
 ## 🔒 Privacidad y seguridad
 
@@ -113,7 +118,7 @@ npm ci
 npm test
 ```
 
-La suite incluye 28 pruebas del motor, los sonidos, la interfaz y la integración. Entre otras cosas verifica que:
+La suite prueba el motor, los sonidos, la interfaz y la integración con dobles; no sustituye una prueba WebRTC entre navegadores reales. Entre otras cosas verifica que:
 
 - no existe detección de movimiento en el emisor;
 - el supervisor puede elegir y reproducir los ocho MP3;
