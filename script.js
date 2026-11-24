@@ -1112,9 +1112,9 @@ class RemoteVisionApp {
                 
                 await this.createLocalAudioStream();
                 
-                // Se envía la llamada con las opciones de oferta SDP para habilitar recepción de video y audio
+                // PeerJS 1.4.7 pasa `constraints` a createOffer; `offerOptions` se ignora.
                 const call = this.peer.call(code, this.localAudioStream, {
-                    offerOptions: {
+                    constraints: {
                         offerToReceiveVideo: true,
                         offerToReceiveAudio: true
                     }
@@ -1157,11 +1157,13 @@ class RemoteVisionApp {
     }
 
     handleRemoteStream(stream) {
+        // PeerJS emite `stream` por cada pista, a menudo con el mismo MediaStream.
+        // No reiniciar el vídeo ni los temporizadores al llegar la segunda pista.
+        if (this.remoteStream === stream && this.state.isConnected) return;
         this.remoteStream = stream;
+        this.setupVideoForMobile();
         this.elements.remoteVideo.srcObject = stream;
         this.elements.connectionOverlay.classList.add('hidden');
-        
-        this.setupVideoForMobile();
         
         // Detección de movimiento: ya hay vídeo remoto que analizar
         if (this.motionPanels) this.motionPanels.viewer.attach();
@@ -1203,7 +1205,8 @@ class RemoteVisionApp {
         
         video.setAttribute('playsinline', 'true');
         video.setAttribute('webkit-playsinline', 'true');
-        video.setAttribute('muted', 'false');
+        // `muted` es un atributo booleano: muted="false" también silencia.
+        video.removeAttribute('muted');
         
         video.onloadedmetadata = () => {
             console.log('Metadata del video cargado');
@@ -1853,7 +1856,7 @@ class RemoteVisionApp {
 // Inicializar aplicación
 document.addEventListener('DOMContentLoaded', () => {
     if (!navigator.mediaDevices || !window.Peer) {
-        alert('Tu navegador no es compatible. Por favor, usa Chrome, Firefox o Edge actualizado.');
+        alert('No se pudo iniciar la aplicación. Abre la página por HTTPS (o localhost), usa un navegador actualizado y comprueba tu conexión a Internet.');
         return;
     }
     

@@ -489,3 +489,42 @@ test('probar alarma usa el sonido seleccionado y limpiar registro reinicia los c
     assert.strictEqual(document.getElementById('viewerMotionCount').textContent, '0');
     assert.deepStrictEqual(errors, []);
 });
+
+test('el supervisor solicita vídeo con la opción constraints de PeerJS aunque no exista captureStream', async (t) => {
+    const { app, window } = boot(t);
+    const audio = { kind: 'audio', enabled: true, stop() {} };
+    const stream = {
+        getAudioTracks: () => [audio], getVideoTracks: () => [],
+        getTracks: () => [audio], addTrack() {}
+    };
+    window.navigator.mediaDevices.getUserMedia = async () => stream;
+    let options;
+    let handlers = {};
+    app.peer = { call(code, local, opts) {
+        options = opts;
+        return { peer: code, on(name, fn) { handlers[name] = fn; return this; }, close() {} };
+    } };
+    const pending = app.attemptVideoCall('ABCDEF');
+    await waitFor(() => handlers.stream);
+    assert.equal(options.constraints.offerToReceiveVideo, true);
+    assert.equal(options.constraints.offerToReceiveAudio, true);
+    assert.equal(options.offerOptions, undefined);
+    handlers.stream(makeStream());
+    await pending;
+    app.disconnectFromEmitter();
+});
+
+test('los eventos repetidos de pistas no reinician el vídeo remoto y no lo silencian', (t) => {
+    const { app } = boot(t);
+    const stream = makeStream();
+    let starts = 0;
+    app.startUptimeTimer = () => { starts++; };
+    app.startConnectionStatsMonitoring = () => {};
+    app.handleRemoteStream(stream);
+    assert.equal(app.elements.remoteVideo.hasAttribute('muted'), false);
+    assert.equal(app.elements.remoteVideo.muted, false);
+    assert.equal(typeof app.elements.remoteVideo.onloadedmetadata, 'function');
+    app.handleRemoteStream(stream);
+    assert.equal(starts, 1);
+    app.disconnectFromEmitter();
+});
