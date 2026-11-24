@@ -1040,25 +1040,6 @@ class RemoteVisionApp {
         });
     }
 
-    // Pista de vídeo vacía para forzar la declaración 'm=video' en el SDP
-    createBlankVideoTrack() {
-        try {
-            const canvas = document.createElement('canvas');
-            canvas.width = 10;
-            canvas.height = 10;
-            const ctx = canvas.getContext('2d');
-            if (ctx && ctx.fillRect) ctx.fillRect(0, 0, 10, 10);
-            if (typeof canvas.captureStream !== 'function') return null;
-            const stream = canvas.captureStream(1);
-            const track = stream.getVideoTracks()[0] || null;
-            if (track) track.enabled = false;
-            return track;
-        } catch (error) {
-            console.warn('El navegador no permite crear una pista de vídeo neutra:', error);
-            return null;
-        }
-    }
-
     async createLocalAudioStream() {
         try {
             this.localAudioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -1094,11 +1075,13 @@ class RemoteVisionApp {
             }
         }
 
-        // Se adjunta el track de video neutro al stream de oferta
-        if (this.localAudioStream) {
-            const blankVideoTrack = this.createBlankVideoTrack();
-            if (blankVideoTrack) this.localAudioStream.addTrack(blankVideoTrack);
-        }
+        // No se añade ninguna pista de vídeo local al offer: el supervisor sólo
+        // quiere RECIBIR vídeo del emisor. Con `offerToReceiveVideo: true` y sin
+        // una pista de vídeo propia, el offer incluye una sección m=video de
+        // recepción y la cámara del emisor fluye hacia el supervisor.
+        // (Antes se insertaba una pista de vídeo en blanco deshabilitada para
+        // forzar la m=video, pero eso ofrecía vídeo del supervisor en lugar de
+        // solicitarlo, por lo que nunca llegaba la cámara del emisor.)
     }
 
     async attemptVideoCall(code) {
