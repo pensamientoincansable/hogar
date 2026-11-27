@@ -39,37 +39,51 @@ const urlsOf = (servers) => servers.flatMap(server =>
  * 1. Relé por defecto
  * ======================================================================== */
 
-test('la configuración por defecto incluye STUN y al menos un TURN con credenciales', () => {
+test('por defecto la conexión es directa: sólo STUN y ningún servicio de terceros', () => {
     const servers = IceServers.build();
 
     assert.ok(Array.isArray(servers) && servers.length > 0);
     const urls = urlsOf(servers);
 
     assert.ok(urls.some(url => url.startsWith('stun:')), 'faltan servidores STUN');
-    assert.ok(urls.some(url => url.startsWith('turn:') || url.startsWith('turns:')), 'falta un relé TURN');
+    assert.ok(urls.every(url => url.startsWith('stun:')), 'no debe haber relé activado por defecto');
+    assert.strictEqual(IceServers.hasTurn(servers), false, 'sin cuotas de terceros por defecto');
+});
 
-    assert.strictEqual(IceServers.hasTurn(servers), true, 'hasTurn reconoce el relé por defecto');
-
+test('el relé público sólo se usa si se activa a mano, y entonces lleva credenciales', () => {
+    const servers = IceServers.build({ includeDefaultTurn: true });
     const turnServers = servers.filter(server =>
         urlsOf([server]).some(url => /^turns?:/i.test(url))
     );
-    assert.ok(turnServers.length > 0);
+
+    assert.ok(turnServers.length > 0, 'al activarlo debe haber un relé');
     for (const server of turnServers) {
         assert.ok(server.username, 'cada TURN necesita usuario');
         assert.ok(server.credential, 'cada TURN necesita credencial');
     }
+
+    const urls = urlsOf(turnServers);
+    assert.ok(urls.some(url => /:443/.test(url)), 'falta TURN en el 443 (cortafuegos)');
+    assert.ok(urls.some(url => /:80/.test(url)), 'falta TURN en el 80');
+    assert.ok(urls.some(url => /transport=tcp/.test(url)), 'falta TURN por TCP');
 });
 
-test('el relé por defecto usa el puerto 443 (además del 80) para atravesar cortafuegos', () => {
-    const urls = urlsOf(IceServers.build({ includeDefaultTurn: true }));
-    assert.ok(urls.some(url => /:443$/.test(url)), 'falta TURN en el 443');
-    assert.ok(urls.some(url => /:80$/.test(url)), 'falta TURN en el 80');
-});
-
-test('sin TURN se informa claramente de que no hay relé', () => {
+test('sin TURN la lista queda sólo con STUN (conexión directa)', () => {
     const servers = IceServers.build({ includeDefaultTurn: false, customTurn: {} });
     assert.strictEqual(IceServers.hasTurn(servers), false);
     assert.ok(urlsOf(servers).every(url => url.startsWith('stun:')));
+});
+
+test('el relé público activado se guarda y se recupera tal cual', () => {
+    const storage = makeStorage();
+    IceServers.save({ includeDefaultTurn: true, customTurn: {} }, storage);
+
+    const loaded = IceServers.load(storage);
+    assert.strictEqual(loaded.includeDefaultTurn, true);
+    assert.strictEqual(IceServers.hasTurn(IceServers.build(loaded)), true);
+
+    IceServers.save({ includeDefaultTurn: false, customTurn: {} }, storage);
+    assert.strictEqual(IceServers.hasTurn(IceServers.build(IceServers.load(storage))), false);
 });
 
 /* ==========================================================================
@@ -151,14 +165,14 @@ test('si localStorage falla, la aplicación sigue con la configuración por defe
 
     const loaded = IceServers.load(brokenStorage);
     assert.deepStrictEqual(loaded.customTurn, { urls: '', username: '', credential: '' });
-    assert.strictEqual(loaded.includeDefaultTurn, true);
+    assert.strictEqual(loaded.includeDefaultTurn, false, 'sin relé de terceros por defecto');
 });
 
 test('datos corruptos en localStorage no rompen la carga', () => {
     const storage = makeStorage({ visionIceServers: '{esto no es json' });
     const loaded = IceServers.load(storage);
-    assert.strictEqual(loaded.includeDefaultTurn, true);
-    assert.strictEqual(IceServers.hasTurn(IceServers.build(loaded)), true);
+    assert.strictEqual(loaded.includeDefaultTurn, false);
+    assert.strictEqual(IceServers.hasTurn(IceServers.build(loaded)), false);
 });
 
 test('una URL de TURN inválida guardada no se inyecta en la configuración ICE', () => {

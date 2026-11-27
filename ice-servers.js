@@ -1,24 +1,31 @@
 /* ============================================================================
- * ice-servers.js — Servidores ICE (STUN + TURN) para Visión Remota
+ * ice-servers.js — Servidores ICE (STUN + TURN opcional) para Visión Remota
  * ----------------------------------------------------------------------------
  * Módulo independiente y sin dependencias externas.
  *
- * EL PROBLEMA QUE RESUELVE
- *   WebRTC intenta primero una conexión DIRECTA (P2P) entre los dispositivos.
- *   Para descubrir las direcciones públicas se usan servidores STUN. Eso
- *   funciona en la misma red local y en NAT domésticos sencillos, pero falla
- *   cuando alguno de los dos equipos está detrás de un NAT simétrico / CGNAT
- *   (móvil 4G/5G, red de oficina, cortafuegos corporativo...). En ese caso no
- *   existe una ruta directa posible y hace falta un servidor TURN que actúe de
- *   relé, reenviando el vídeo. Sin TURN, la llamada se queda "conectando"
- *   para siempre aunque el código sea correcto.
+ * CÓMO VIAJA EL VÍDEO
+ *   Por defecto la aplicación es 100 % DIRECTA (P2P): la cámara del emisor va
+ *   al supervisor sin pasar por ningún servidor de medios y sin cuotas. Para
+ *   descubrir la dirección pública de cada dispositivo se usa STUN, que es un
+ *   servicio ligero y gratuito (sólo responde "tu IP y puerto son estos"): no
+ *   transporta ni almacena el vídeo.
+ *
+ *   Con STUN, la inmensa mayoría de las redes domésticas y móviles permiten
+ *   esa conexión directa desde otra red. Falla cuando alguno de los dos equipos
+ *   está detrás de un NAT simétrico / CGNAT muy restrictivo o de un
+ *   cortafuegos que bloquea todo tráfico entrante: en ese caso no existe ruta
+ *   directa posible y el vídeo sólo puede pasar por un relé TURN.
+ *
+ * EL RELÉ (TURN) ES OPCIONAL
+ *   Por eso aquí NO se activa ningún TURN de terceros por defecto: nada de
+ *   cuotas ajenas. Si una red concreta no conecta, el usuario puede:
+ *   - activar el relé público gratuito (cuota compartida, para salir del paso), o
+ *   - indicar su propio servidor TURN (coturn en un equipo propio, sin límites
+ *     ni pagos, o un proveedor con plan gratuito si prefiere no administrarlo).
  *
  * QUÉ HACE ESTE MÓDULO
- *   1. Ofrece la lista por defecto de servidores STUN públicos y de TURN
- *      (Open Relay de Metered, con credenciales públicas de demostración).
- *   2. Permite al usuario añadir SU PROPIO servidor TURN (por ejemplo coturn
- *      propio o Cloudflare Calls) desde la interfaz, con lo que no depende de
- *      ningún servicio público y puede servirlo a cualquier red.
+ *   1. Ofrece la lista por defecto de STUN públicos (ruta directa).
+ *   2. Permite añadir un TURN propio o activar el público, siempre a mano.
  *   3. Nunca lanza excepciones: si localStorage falla o los datos son basura,
  *      siempre devuelve una configuración válida.
  *
@@ -57,14 +64,12 @@
     ];
 
     /**
-     * TURN: reenvían el vídeo cuando no hay ruta directa. Son la pieza que
-     * faltaba para poder supervisar desde otra red.
+     * TURN público: SÓLO se usa si el usuario lo activa expresamente, porque
+     * es un servicio de terceros con cuota (Open Relay de Metered, pensado
+     * para prototipos). La conexión por defecto no depende de él.
      *
-     * Open Relay (Metered) es un servicio público pensado para prototipos:
-     * ofrece 20 GB/mes por relé, lo que da muchas horas de vigilancia. Se
-     * usan los puertos 80 y 443 (también por TCP) porque son los que casi
-     * ningún cortafuegos bloquea. La cuota es compartida y puede agotarse;
-     * por eso la interfaz permite introducir un TURN propio.
+     * Se usan los puertos 80 y 443 (y también TCP) porque son los que casi
+     * ningún cortafuegos bloquea.
      */
     const DEFAULT_TURN_SERVERS = [
         {
@@ -159,14 +164,14 @@
         },
 
         /**
-         * ¿El usuario ha configurado ya algo? Se guarda en localStorage.
-         * Devuelve siempre un objeto con la forma esperada.
+         * Preferencias guardadas. Sin nada guardado, la conexión es directa:
+         * `includeDefaultTurn` empieza en false para no depender de terceros.
          */
         load(storage) {
             const store = storage || (typeof localStorage !== 'undefined' ? localStorage : null);
             const base = {
                 customTurn: IceServers.emptyCustomTurn(),
-                includeDefaultTurn: true
+                includeDefaultTurn: false
             };
 
             if (!store) return base;
@@ -194,7 +199,7 @@
                         username: clean(turn.username),
                         credential: clean(turn.credential)
                     },
-                    includeDefaultTurn: parsed.includeDefaultTurn !== false
+                    includeDefaultTurn: parsed.includeDefaultTurn === true
                 };
             } catch (error) {
                 return base;
@@ -210,7 +215,7 @@
                     username: clean(settings && settings.customTurn && settings.customTurn.username),
                     credential: clean(settings && settings.customTurn && settings.customTurn.credential)
                 },
-                includeDefaultTurn: !settings || settings.includeDefaultTurn !== false
+                includeDefaultTurn: Boolean(settings && settings.includeDefaultTurn)
             };
 
             if (!store) return value;
@@ -237,7 +242,7 @@
 
             const servers = DEFAULT_STUN_URLS.map(urls => ({ urls }));
 
-            if (config.includeDefaultTurn !== false) {
+            if (config.includeDefaultTurn === true) {
                 servers.push(...DEFAULT_TURN_SERVERS);
             }
 
@@ -254,7 +259,7 @@
             return servers;
         },
 
-        /** true si la lista contiene al menos un TURN utilizable. */
+        /** true si la lista contiene al menos un TURN (relé) utilizable. */
         hasTurn(servers) {
             const list = Array.isArray(servers) ? servers : DEFAULT_ICE_SERVERS;
             return list.some(server => {

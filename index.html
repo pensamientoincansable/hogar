@@ -498,9 +498,12 @@
             </div>
             <div class="modal-body" id="iceModalBody">
                 <p class="ice-intro">
-                    Para ver la cámara desde <strong>otra red</strong> (no la misma Wi-Fi) hace falta un
-                    servidor de relé <strong>TURN</strong>. Sin él, WebRTC sólo consigue la conexión directa
-                    que funciona dentro de la red local.
+                    La transmisión es <strong>directa entre dispositivos</strong>: la cámara va del emisor
+                    al supervisor sin pasar por ningún servidor de vídeo, sin cuotas y sin límite de
+                    tiempo. Sólo se usa STUN, que se limita a averiguar la dirección pública de cada
+                    equipo. El relé <strong>TURN</strong> de abajo es <strong>opcional</strong>: hace falta
+                    únicamente si una red muy restrictiva (CGNAT de móvil, cortafuegos de empresa) impide
+                    la conexión directa.
                 </p>
 
                 <div class="ice-status info" id="iceStatus">
@@ -530,15 +533,21 @@
                 </div>
 
                 <label class="ice-checkbox">
-                    <input type="checkbox" id="iceUsePublicRelay" checked>
-                    <span>Usar también el relé público gratuito (cuota compartida, para pruebas)</span>
+                    <input type="checkbox" id="iceUsePublicRelay">
+                    <span>Activar el relé público de un tercero (cuota compartida; sólo para salir del paso)</span>
                 </label>
 
                 <p class="ice-hint">
-                    <i class="fas fa-circle-info"></i>
-                    Con tu propio servidor TURN (coturn, Cloudflare Calls, Metered…) dependes de tu
-                    infraestructura y no de una cuota compartida. Pulsa <strong>Probar relé</strong> para
-                    comprobar que responde antes de usarlo. La configuración se guarda sólo en este navegador.
+                    <i class="fas fa-circle-check"></i>
+                    <span><strong>Sin cuotas:</strong> monta tu propio <code>coturn</code> en un equipo o
+                    servidor que ya tengas (es software libre y sin límites) y pon aquí su URL, usuario y
+                    contraseña. Con la conexión directa no necesitas nada de esto; y aunque configures un
+                    relé, sólo se usará cuando la ruta directa falle.</span>
+                </p>
+                <p class="ice-hint">
+                    <i class="fas fa-vial"></i>
+                    <span>Pulsa <strong>Probar relé</strong> para comprobar que responde. La configuración
+                    se guarda sólo en este navegador.</span>
                 </p>
             </div>
             <div class="modal-actions ice-actions">

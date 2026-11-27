@@ -6,7 +6,7 @@ class RemoteVisionApp {
         const iceApi = typeof IceServers !== 'undefined' ? IceServers : null;
         this.iceSettings = iceApi
             ? iceApi.load()
-            : { customTurn: { urls: '', username: '', credential: '' }, includeDefaultTurn: true };
+            : { customTurn: { urls: '', username: '', credential: '' }, includeDefaultTurn: false };
         this.iceServers = iceApi ? iceApi.build(this.iceSettings) : [];
 
         // Configuración mejorada con servidores STUN + TURN
@@ -223,7 +223,7 @@ class RemoteVisionApp {
         if (iceTurnUrls) iceTurnUrls.value = turn.urls || '';
         if (iceTurnUsername) iceTurnUsername.value = turn.username || '';
         if (iceTurnCredential) iceTurnCredential.value = turn.credential || '';
-        if (iceUsePublicRelay) iceUsePublicRelay.checked = this.iceSettings.includeDefaultTurn !== false;
+        if (iceUsePublicRelay) iceUsePublicRelay.checked = this.iceSettings.includeDefaultTurn === true;
     }
 
     /** Resume en una línea qué vías de conexión están activas. */
@@ -237,28 +237,32 @@ class RemoteVisionApp {
 
         const summary = this.elements.iceSummary;
         if (summary) {
-            // Con el relé público no se promete nada: la cuota es compartida y
-            // sólo una prueba real confirma que responde.
-            summary.textContent = hasTurn
-                ? (hasCustom ? 'Relé propio + público' : 'Relé público (probar)')
-                : 'Sólo conexión directa';
-            summary.classList.toggle('warn', !hasTurn);
-            summary.title = hasTurn
-                ? 'Pulsa para configurar o probar el relé de conexión a distancia'
-                : 'Sin relé no se puede supervisar desde otra red: pulsa para configurarlo';
+            // Directo es el modo normal y no requiere nada de terceros.
+            summary.textContent = hasCustom
+                ? 'Directa + relé propio'
+                : (hasTurn ? 'Directa + relé público' : 'Conexión directa');
+            summary.classList.toggle('warn', false);
+
+            if (hasCustom) {
+                summary.title = 'Conexión directa cuando es posible; tu relé TURN sólo se usa si la red lo exige';
+            } else if (hasTurn) {
+                summary.title = 'Relé público activado: tiene cuota compartida y depende de un tercero';
+            } else {
+                summary.title = 'Vídeo directo entre dispositivos, sin cuotas. Si una red muy restrictiva no conecta, aquí puedes activar un relé';
+            }
         }
 
         const status = this.elements.iceStatus;
         if (status) {
-            if (!hasTurn) {
-                status.className = 'ice-status warn';
-                status.innerHTML = '<i class="fas fa-triangle-exclamation"></i> Sin relé (TURN) la supervisión desde otra red puede no conectar.';
-            } else if (hasCustom) {
+            if (hasCustom) {
                 status.className = 'ice-status ok';
-                status.innerHTML = '<i class="fas fa-circle-check"></i> Usando tu servidor TURN propio: funciona desde cualquier red.';
+                status.innerHTML = '<i class="fas fa-circle-check"></i> Tu relé TURN está configurado. Sólo se usa si la conexión directa no es posible.';
+            } else if (hasTurn) {
+                status.className = 'ice-status info';
+                status.innerHTML = '<i class="fas fa-circle-info"></i> Relé público activado (cuota compartida de un tercero). Desactívalo si prefieres sólo conexión directa.';
             } else {
                 status.className = 'ice-status info';
-                status.innerHTML = '<i class="fas fa-circle-info"></i> Usando el relé público (cuota compartida). Para uso intensivo, añade tu propio TURN.';
+                status.innerHTML = '<i class="fas fa-bolt"></i> <span><strong>Conexión directa:</strong> el vídeo viaja del emisor al supervisor sin intermediarios ni cuotas. STUN sólo averigua la dirección pública.</span>';
             }
         }
 
@@ -1301,15 +1305,6 @@ class RemoteVisionApp {
         this.updateConnectionPrompt('CONECTANDO…', 'Buscando al emisor y esperando su cámara');
         this.showNotification(`Conectando a ${code}...`, 'info');
 
-        // Aviso temprano: desde otra red, sin relé (TURN) la conexión puede
-        // quedarse esperando aunque el código sea correcto.
-        if (typeof IceServers !== 'undefined' && !IceServers.hasTurn(this.iceServers)) {
-            this.showNotification(
-                'No hay servidor de relé (TURN): si estás en otra red, añádelo en «Conexión a distancia»',
-                'warning'
-            );
-        }
-
         try {
             await this.attemptConnection(code);
         } finally {
@@ -2074,10 +2069,12 @@ class RemoteVisionApp {
                 }
             }, 2000 * this.state.connectionAttempts);
         } else {
-            const hasTurn = typeof IceServers === 'undefined' || IceServers.hasTurn(this.iceServers);
+            // Sin relé esto es lo normal en redes muy restrictivas; con relé
+            // hay que revisar su configuración.
+            const hasTurn = typeof IceServers !== 'undefined' && IceServers.hasTurn(this.iceServers);
             const hint = hasTurn
-                ? ' Si sigues en otra red, comprueba que tu servidor TURN sea accesible.'
-                : ' Si el supervisor está en otra red, configura un servidor TURN en «Conexión a distancia».';
+                ? ' Revisa que tu relé TURN siga accesible (puedes probarlo en «Conexión a distancia»).'
+                : ' Si tu red (o la del emisor) es muy restrictiva, activa o configura un relé en «Conexión a distancia».';
             this.showErrorModal(
                 `No se pudo conectar después de ${this.state.connectionAttempts} intentos: ${error}.${hint}`
             );

@@ -535,17 +535,18 @@ test('los eventos repetidos de pistas no reinician el vídeo remoto y no lo sile
  * 4. Conexión a distancia y varios supervisores
  * ======================================================================== */
 
-test('PeerJS recibe servidores ICE con relé TURN desde el primer momento', (t) => {
-    const { app } = boot(t);
+test('por defecto la conexión es directa: STUN sin ningún relé de terceros', (t) => {
+    const { app, document } = boot(t);
 
     const ice = app.config.peerServer.config.iceServers;
     assert.ok(Array.isArray(ice) && ice.length > 0, 'faltan servidores ICE');
     assert.strictEqual(app.iceServers, ice);
 
     const urls = ice.flatMap(server => (Array.isArray(server.urls) ? server.urls : [server.urls]));
-    assert.ok(urls.some(url => url.startsWith('turn:') || url.startsWith('turns:')),
-        'sin TURN no se puede supervisar desde otra red');
+    assert.ok(urls.some(url => url.startsWith('stun:')), 'hace falta STUN para la ruta directa');
+    assert.ok(urls.every(url => url.startsWith('stun:')), 'no debe haber TURN activado por defecto');
     assert.strictEqual(app.config.peerServer.config.iceTransportPolicy, 'all');
+    assert.strictEqual(document.getElementById('iceSummary').textContent, 'Conexión directa');
 });
 
 test('la configuración de PeerJS se aplica también a la instancia creada al conectar', async (t) => {
@@ -561,7 +562,7 @@ test('la configuración de PeerJS se aplica también a la instancia creada al co
     await app.setViewerMode();
     assert.ok(received, 'no se creó Peer con opciones');
     assert.strictEqual(received.config, app.config.peerServer.config);
-    assert.ok(received.config.iceServers.some(server => String(server.urls).includes('turn')));
+    assert.ok(Array.isArray(received.config.iceServers) && received.config.iceServers.length > 0);
 });
 
 test('el formulario de conexión a distancia guarda y aplica un TURN propio', async (t) => {

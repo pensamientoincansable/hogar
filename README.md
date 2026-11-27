@@ -1,31 +1,53 @@
 # 🔭 Visión Remota
 
-Sistema de vigilancia con vídeo y audio WebRTC. Un dispositivo actúa como **emisor** y uno o varios como **supervisor**, en la misma red o **desde cualquier otra red** gracias al relé TURN.
+Sistema de vigilancia con vídeo y audio WebRTC. Un dispositivo actúa como **emisor** y uno o varios como **supervisor**. La transmisión es **directa entre dispositivos** (sin cuotas ni servidores de vídeo), también desde otra red en la mayoría de los casos; el relé TURN es opcional y sólo para redes muy restrictivas.
 
-## 🌍 Supervisar desde otra red
+## 🌍 Transmisión directa entre dispositivos (sin cuotas)
 
-WebRTC intenta primero una conexión **directa** entre los dispositivos. Eso basta en la misma Wi-Fi o con un router doméstico sencillo, pero falla cuando alguno de los dos equipos está detrás de un **NAT estricto, CGNAT (móvil 4G/5G) o un cortafuegos**: no existe una ruta directa posible y la llamada se queda "conectando" aunque el código sea correcto.
+**Por defecto el vídeo va directo del emisor al supervisor** (P2P, WebRTC), sin pasar por ningún servidor de medios: sin cuotas, sin límites de tiempo y sin servicios de pago. Para descubrir la dirección pública de cada equipo se usa **STUN**, que es gratuito y ligero: sólo responde "tu IP y puerto son estos", no transporta ni almacena el vídeo.
 
-La solución es un servidor **TURN**, que reenvía el vídeo cuando el P2P no es viable. La aplicación ya incluye:
+Esto funciona en la misma red y también **desde otra red** en la inmensa mayoría de conexiones domésticas y móviles.
 
-- **STUN** público para la ruta directa (la opción más rápida y con menos latencia).
-- **TURN público** (Open Relay de Metered, puertos 80 y 443) con una cuota compartida, suficiente para pruebas y supervisión ocasional.
-- La posibilidad de **añadir tu propio servidor TURN** (coturn, Cloudflare Calls, Metered…) desde el botón **Conexión a distancia** de la cabecera.
+### El único caso en el que la ruta directa no existe
 
-### Configurar tu propio relé (recomendado para uso continuo)
+Si alguno de los dos equipos está detrás de un **NAT simétrico / CGNAT** (algunas tarifas móviles) o de un **cortafuegos** que bloquea todo el tráfico entrante, no hay ninguna ruta directa posible: es una limitación de la red, no de la aplicación. En ese caso, y **sólo en ese caso**, el vídeo necesita un **relé TURN** (un servidor que reenvía los paquetes, cifrados de extremo a extremo).
 
-1. Pulsa **Conexión a distancia** en la cabecera.
-2. Escribe la URL de tu TURN, por ejemplo `turn:tu-servidor.com:3478` (o `turns:tu-servidor.com:443`).
-3. Indica usuario y contraseña (los que hayas definido en el servidor).
-4. Pulsa **Guardar**. La configuración se guarda en ese navegador.
+El relé es **opcional y está desactivado por defecto**. Si lo necesitas, tienes dos opciones sin cuotas de pago:
 
-Con tu propio TURN no dependes de cuotas compartidas y el vídeo llega a cualquier red. Si guardas mientras hay una transmisión activa, la nueva configuración se aplica en la siguiente conexión para no cortar la actual.
+| Opción | Coste | Cuota |
+| --- | --- | --- |
+| **Tu propio `coturn`** en un equipo o servidor que ya tengas | Software libre | Sin límites: sólo consume ancho de banda de tu equipo |
+| **Relé público** (Open Relay de Metered) activado a mano | Gratis | Compartida; suficiente para salir del paso |
 
-El panel del supervisor muestra en **Estado de Conexión → Ruta** si el vídeo va **directo** o **por relé**, lo que ayuda a diagnosticar problemas de red.
+Pasos para montar tu propio relé (una sola vez):
+
+```bash
+# 1. Instalar coturn en un equipo con IP pública (o en el propio router si lo admite)
+sudo apt install coturn
+
+# 2. Configuración mínima en /etc/turnserver.conf
+listening-port=3478
+fingerprint
+lt-cred-mech
+user=vision:una-contraseña-larga
+realm=mi-casa
+
+# 3. Arrancar
+sudo systemctl enable --now coturn
+```
+
+Después, en la aplicación: **Conexión a distancia** → URL `turn:tu-ip-o-dominio:3478`, usuario y contraseña → **Probar relé** → **Guardar**.
+
+### Cómo saber qué está pasando
+
+- La cabecera indica el modo: **Conexión directa**, **Directa + relé propio** o **Directa + relé público**.
+- En el panel del supervisor, **Estado de Conexión → Ruta** muestra si el vídeo va **directo**, por **red local** o **por relé**.
+- Aunque configures un relé, **se usa sólo si la ruta directa falla**: nunca añade latencia ni consumo innecesario.
+- Guardar la configuración mientras hay una transmisión activa no la corta: se aplica en la siguiente conexión.
 
 ### Varios supervisores
 
-El emisor atiende **varias conexiones a la vez**: varios supervisores pueden ver la misma cámara, y el cambio de cámara o el audio bidireccional se aplican a todos.
+El emisor atiende **varias conexiones a la vez**: varios supervisores pueden ver la misma cámara, y el cambio de cámara o el audio bidireccional se aplican a todos. Cada supervisor añade una copia del vídeo saliente, así que conviene no abusar del número en conexiones móviles.
 
 ## 🔧 Uso
 
@@ -112,7 +134,7 @@ El registro de eventos conserva la hora, el nivel y una captura local. Las prefe
 1. Comprueba que la imagen se ve en el propio emisor y que la cámara no está tapada o bloqueada por el sistema.
 2. Actualiza la página en ambos dispositivos, inicia la transmisión y vuelve a conectar. Si el navegador bloquea la reproducción, toca la pantalla.
 3. Revisa los permisos de cámara del sitio en el navegador y en el sistema operativo. Si se denegaron anteriormente, habilítalos en ajustes y recarga.
-4. Prueba ambos dispositivos con navegadores actualizados y otra red. Algunas redes bloquean WebRTC: si el supervisor está en otra red, comprueba en **Conexión a distancia** que hay un relé TURN activo (y que la cuota pública no está agotada). Revisa también el valor de **Ruta** en Estado de Conexión.
+4. Prueba ambos dispositivos con navegadores actualizados y otra red. La conexión es directa por defecto; si tu red es muy restrictiva (CGNAT, cortafuegos), activa o configura un relé en **Conexión a distancia** y compruébalo con **Probar relé**. Revisa el valor de **Ruta** en Estado de Conexión.
 
 ### Calidad de vídeo baja
 
@@ -152,8 +174,9 @@ La suite prueba el motor, los sonidos, la interfaz y la integración con dobles;
 - un supervisor que conecta antes de iniciar la cámara queda en espera;
 - el código visible es el mismo que se registra y se normaliza sin distinguir mayúsculas;
 - los avisos remotos no crean bucles;
-- la configuración ICE que recibe PeerJS siempre incluye un relé TURN, también al crear conexiones nuevas;
-- un TURN propio se valida, se guarda y sustituye al público;
+- por defecto no se activa ningún relé de terceros: la conexión es directa (sólo STUN);
+- un TURN propio se valida, se guarda y se aplica a las conexiones nuevas;
+- el relé público sólo se usa si se activa a mano;
 - el emisor atiende a varios supervisores y el cambio de cámara llega a todos;
 - el diagnóstico distingue la ruta directa de la que pasa por el relé.
 
