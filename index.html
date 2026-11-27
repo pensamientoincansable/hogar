@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+    <script src="ice-servers.js"></script>
     <script src="motion.js"></script>
 </head>
 <body>
@@ -27,6 +28,11 @@
                 <div class="status-dot connected"></div>
             </div>
             <div class="connection-info">
+                <span id="iceSummary" class="ice-summary" title="Vía de conexión para supervisar desde otra red">Sólo conexión directa</span>
+                <button id="btnIceSettings" class="ice-settings-button" title="Configurar conexión a distancia (servidor TURN)">
+                    <i class="fas fa-tower-broadcast"></i>
+                    <span>Conexión a distancia</span>
+                </button>
                 <span id="connectionStatus" class="status">🟢 Conectado</span>
             </div>
         </header>
@@ -439,6 +445,10 @@
                             <span class="label">Protocolo:</span>
                             <span class="value">WebRTC P2P</span>
                         </div>
+                        <div class="detail">
+                            <span class="label">Ruta:</span>
+                            <span class="value" id="connectionRouteValue">--</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -475,6 +485,72 @@
                     <button id="btnRetry" class="primary-button">Reintentar</button>
                     <button class="secondary-button close-modal">Cerrar</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Conexión a distancia (STUN + TURN) -->
+    <div id="iceModal" class="modal hidden">
+        <div class="modal-content ice-modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-tower-broadcast"></i> Conexión a distancia</h3>
+                <button class="modal-close" id="iceClose" aria-label="Cerrar">&times;</button>
+            </div>
+            <div class="modal-body" id="iceModalBody">
+                <p class="ice-intro">
+                    Para ver la cámara desde <strong>otra red</strong> (no la misma Wi-Fi) hace falta un
+                    servidor de relé <strong>TURN</strong>. Sin él, WebRTC sólo consigue la conexión directa
+                    que funciona dentro de la red local.
+                </p>
+
+                <div class="ice-status info" id="iceStatus">
+                    <i class="fas fa-circle-info"></i> Cargando configuración…
+                </div>
+
+                <div class="ice-field">
+                    <label for="iceTurnUrls">URL de tu servidor TURN</label>
+                    <input type="text" id="iceTurnUrls"
+                           placeholder="turn:tu-servidor.com:3478"
+                           autocomplete="off" autocapitalize="off" spellcheck="false">
+                    <small>Puedes indicar varias separadas por comas, p. ej.
+                        <code>turn:host:3478, turns:host:443</code></small>
+                </div>
+
+                <div class="ice-row">
+                    <div class="ice-field">
+                        <label for="iceTurnUsername">Usuario</label>
+                        <input type="text" id="iceTurnUsername" autocomplete="off"
+                               autocapitalize="off" spellcheck="false" placeholder="usuario">
+                    </div>
+                    <div class="ice-field">
+                        <label for="iceTurnCredential">Contraseña</label>
+                        <input type="password" id="iceTurnCredential" autocomplete="off"
+                               spellcheck="false" placeholder="contraseña">
+                    </div>
+                </div>
+
+                <label class="ice-checkbox">
+                    <input type="checkbox" id="iceUsePublicRelay" checked>
+                    <span>Usar también el relé público gratuito (cuota compartida, para pruebas)</span>
+                </label>
+
+                <p class="ice-hint">
+                    <i class="fas fa-circle-info"></i>
+                    Con tu propio servidor TURN (coturn, Cloudflare Calls, Metered…) dependes de tu
+                    infraestructura y no de una cuota compartida. Pulsa <strong>Probar relé</strong> para
+                    comprobar que responde antes de usarlo. La configuración se guarda sólo en este navegador.
+                </p>
+            </div>
+            <div class="modal-actions ice-actions">
+                <button id="btnIceTest" class="secondary-button">
+                    <i class="fas fa-vial"></i> Probar relé
+                </button>
+                <button id="btnIceReset" class="secondary-button">
+                    <i class="fas fa-rotate-left"></i> Restablecer
+                </button>
+                <button id="btnIceSave" class="primary-button">
+                    <i class="fas fa-floppy-disk"></i> Guardar
+                </button>
             </div>
         </div>
     </div>

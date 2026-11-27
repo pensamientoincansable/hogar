@@ -1,6 +1,31 @@
 # 🔭 Visión Remota
 
-Sistema de vigilancia P2P con vídeo y audio WebRTC. Un dispositivo actúa como **emisor** y otro como **supervisor**.
+Sistema de vigilancia con vídeo y audio WebRTC. Un dispositivo actúa como **emisor** y uno o varios como **supervisor**, en la misma red o **desde cualquier otra red** gracias al relé TURN.
+
+## 🌍 Supervisar desde otra red
+
+WebRTC intenta primero una conexión **directa** entre los dispositivos. Eso basta en la misma Wi-Fi o con un router doméstico sencillo, pero falla cuando alguno de los dos equipos está detrás de un **NAT estricto, CGNAT (móvil 4G/5G) o un cortafuegos**: no existe una ruta directa posible y la llamada se queda "conectando" aunque el código sea correcto.
+
+La solución es un servidor **TURN**, que reenvía el vídeo cuando el P2P no es viable. La aplicación ya incluye:
+
+- **STUN** público para la ruta directa (la opción más rápida y con menos latencia).
+- **TURN público** (Open Relay de Metered, puertos 80 y 443) con una cuota compartida, suficiente para pruebas y supervisión ocasional.
+- La posibilidad de **añadir tu propio servidor TURN** (coturn, Cloudflare Calls, Metered…) desde el botón **Conexión a distancia** de la cabecera.
+
+### Configurar tu propio relé (recomendado para uso continuo)
+
+1. Pulsa **Conexión a distancia** en la cabecera.
+2. Escribe la URL de tu TURN, por ejemplo `turn:tu-servidor.com:3478` (o `turns:tu-servidor.com:443`).
+3. Indica usuario y contraseña (los que hayas definido en el servidor).
+4. Pulsa **Guardar**. La configuración se guarda en ese navegador.
+
+Con tu propio TURN no dependes de cuotas compartidas y el vídeo llega a cualquier red. Si guardas mientras hay una transmisión activa, la nueva configuración se aplica en la siguiente conexión para no cortar la actual.
+
+El panel del supervisor muestra en **Estado de Conexión → Ruta** si el vídeo va **directo** o **por relé**, lo que ayuda a diagnosticar problemas de red.
+
+### Varios supervisores
+
+El emisor atiende **varias conexiones a la vez**: varios supervisores pueden ver la misma cámara, y el cambio de cámara o el audio bidireccional se aplican a todos.
 
 ## 🔧 Uso
 
@@ -87,7 +112,7 @@ El registro de eventos conserva la hora, el nivel y una captura local. Las prefe
 1. Comprueba que la imagen se ve en el propio emisor y que la cámara no está tapada o bloqueada por el sistema.
 2. Actualiza la página en ambos dispositivos, inicia la transmisión y vuelve a conectar. Si el navegador bloquea la reproducción, toca la pantalla.
 3. Revisa los permisos de cámara del sitio en el navegador y en el sistema operativo. Si se denegaron anteriormente, habilítalos en ajustes y recarga.
-4. Prueba ambos dispositivos con navegadores actualizados y otra red. Algunas redes bloquean WebRTC; esta instalación usa STUN pero no dispone de servidor TURN, por lo que no todas las redes pueden conectarse.
+4. Prueba ambos dispositivos con navegadores actualizados y otra red. Algunas redes bloquean WebRTC: si el supervisor está en otra red, comprueba en **Conexión a distancia** que hay un relé TURN activo (y que la cuota pública no está agotada). Revisa también el valor de **Ruta** en Estado de Conexión.
 
 ### Calidad de vídeo baja
 
@@ -105,11 +130,12 @@ La cámara y el micrófono exigen **HTTPS o localhost** y autorización del usua
 
 ## 🔒 Privacidad y seguridad
 
-- La conexión multimedia es P2P mediante WebRTC.
+- La conexión multimedia es WebRTC: directa (P2P) cuando la red lo permite y cifrada de extremo a extremo también al pasar por el relé TURN (el relé reenvía paquetes cifrados sin poder ver el vídeo).
 - Los códigos son temporales y sólo existen mientras el emisor está activo.
 - La cámara y el micrófono requieren permiso explícito.
 - La aplicación no graba ni sube las transmisiones.
 - El análisis y las capturas de movimiento permanecen en el supervisor.
+- Los servidores de conexión (STUN/TURN) sólo se guardan en el navegador del usuario; no se envían a ningún servidor propio.
 
 ## 🧪 Pruebas
 
@@ -125,8 +151,12 @@ La suite prueba el motor, los sonidos, la interfaz y la integración con dobles;
 - la transmisión del emisor no analiza fotogramas;
 - un supervisor que conecta antes de iniciar la cámara queda en espera;
 - el código visible es el mismo que se registra y se normaliza sin distinguir mayúsculas;
-- los avisos remotos no crean bucles.
+- los avisos remotos no crean bucles;
+- la configuración ICE que recibe PeerJS siempre incluye un relé TURN, también al crear conexiones nuevas;
+- un TURN propio se valida, se guarda y sustituye al público;
+- el emisor atiende a varios supervisores y el cambio de cámara llega a todos;
+- el diagnóstico distingue la ruta directa de la que pasa por el relé.
 
 ---
 
-✨ **Desarrollado con WebRTC** — conecta dispositivos de forma directa y segura.
+✨ **Desarrollado con WebRTC** — conexión directa cuando es posible y por relé cuando hace falta.

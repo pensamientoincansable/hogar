@@ -19,6 +19,7 @@ const { JSDOM, VirtualConsole } = require('jsdom');
 
 const ROOT = path.join(__dirname, '..');
 const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+const iceSource = fs.readFileSync(path.join(ROOT, 'ice-servers.js'), 'utf8');
 const motionSource = fs.readFileSync(path.join(ROOT, 'motion.js'), 'utf8');
 const appSource = fs.readFileSync(path.join(ROOT, 'script.js'), 'utf8');
 
@@ -234,6 +235,7 @@ function boot(t) {
     window.Peer = FakePeer;
 
     /* --- Cargar la aplicación --- */
+    window.eval(iceSource);
     window.eval(motionSource);
     window.eval(appSource);
     document.dispatchEvent(new window.Event('DOMContentLoaded'));
@@ -527,4 +529,213 @@ test('los eventos repetidos de pistas no reinician el vídeo remoto y no lo sile
     app.handleRemoteStream(stream);
     assert.equal(starts, 1);
     app.disconnectFromEmitter();
+});
+
+/* ==========================================================================
+ * 4. Conexión a distancia y varios supervisores
+ * ======================================================================== */
+
+test('PeerJS recibe servidores ICE con relé TURN desde el primer momento', (t) => {
+    const { app } = boot(t);
+
+    const ice = app.config.peerServer.config.iceServers;
+    assert.ok(Array.isArray(ice) && ice.length > 0, 'faltan servidores ICE');
+    assert.strictEqual(app.iceServers, ice);
+
+    const urls = ice.flatMap(server => (Array.isArray(server.urls) ? server.urls : [server.urls]));
+    assert.ok(urls.some(url => url.startsWith('turn:') || url.startsWith('turns:')),
+        'sin TURN no se puede supervisar desde otra red');
+    assert.strictEqual(app.config.peerServer.config.iceTransportPolicy, 'all');
+});
+
+test('la configuración de PeerJS se aplica también a la instancia creada al conectar', async (t) => {
+    const { app, window } = boot(t);
+    const original = window.Peer;
+    let received = null;
+
+    window.Peer = function (id, options) {
+        received = options;
+        return new original(id, options);
+    };
+
+    await app.setViewerMode();
+    assert.ok(received, 'no se creó Peer con opciones');
+    assert.strictEqual(received.config, app.config.peerServer.config);
+    assert.ok(received.config.iceServers.some(server => String(server.urls).includes('turn')));
+});
+
+test('el formulario de conexión a distancia guarda y aplica un TURN propio', async (t) => {
+    const { app, window, document, errors } = boot(t);
+
+    document.getElementById('btnIceSettings').click();
+    assert.strictEqual(document.getElementById('iceModal').classList.contains('hidden'), false);
+
+    document.getElementById('iceTurnUrls').value = 'turn:mi-relay.com:3478';
+    document.getElementById('iceTurnUsername').value = 'usuario';
+    document.getElementById('iceTurnCredential').value = 'secreto';
+    await app.saveIceSettings();
+
+    assert.strictEqual(document.getElementById('iceModal').classList.contains('hidden'), true);
+    assert.strictEqual(app.config.peerServer.config.iceServers, app.iceServers);
+    assert.ok(app.iceServers.some(server =>
+        server.urls === 'turn:mi-relay.com:3478' &&
+        server.username === 'usuario' &&
+        server.credential === 'secreto'
+    ), 'el TURN propio no llegó a la configuración ICE');
+
+    const stored = JSON.parse(window.localStorage.getItem('visionIceServers'));
+    assert.strictEqual(stored.customTurn.urls, 'turn:mi-relay.com:3478');
+    assert.deepStrictEqual(errors, []);
+});
+
+test('una configuración de TURN incompleta se rechaza sin tocar la conexión', (t) => {
+    const { app, document } = boot(t);
+    const before = app.config.peerServer.config.iceServers;
+
+    document.getElementById('iceTurnUrls').value = 'turn:mi-relay.com:3478';
+    document.getElementById('iceTurnUsername').value = '';
+    document.getElementById('iceTurnCredential').value = '';
+    app.saveIceSettings();
+
+    assert.strictEqual(app.config.peerServer.config.iceServers, before, 'no debe cambiar la configuración');
+    assert.ok(document.querySelector('#notificationContainer .notification.warning'),
+        'debe avisar del error');
+});
+
+test('restablecer devuelve la configuración al relé público', (t) => {
+    const { app, document } = boot(t);
+
+    document.getElementById('iceTurnUrls').value = 'turn:mi-relay.com:3478';
+    document.getElementById('iceTurnUsername').value = 'usuario';
+    document.getElementById('iceTurnCredential').value = 'secreto';
+    app.saveIceSettings();
+
+    app.resetIceSettings();
+
+    assert.ok(app.iceServers.some(server => String(server.urls).includes('openrelay')));
+    assert.ok(!app.iceServers.some(server => String(server.urls).includes('mi-relay.com')));
+});
+
+test('el emisor atiende a varios supervisores y el cambio de cámara llega a todos', async (t) => {
+    const { app, errors } = boot(t);
+    await app.setEmitterMode();
+    await app.startEmitter();
+
+    const makeCall = (peer) => {
+        const handlers = {};
+        const sender = {
+            track: { kind: 'video' },
+            replaced: null,
+            replaceTrack(track) { this.replaced = track; }
+        };
+        return {
+            peer,
+            answeredWith: null,
+            closed: false,
+            sender,
+            // Devuelve siempre la misma instancia, como un RTCRtpSender real.
+            peerConnection: { getSenders: () => [sender] },
+            on(event, handler) { (handlers[event] = handlers[event] || []).push(handler); return this; },
+            answer(stream) { this.answeredWith = stream; },
+            close() { this.closed = true; (handlers.close || []).forEach(handler => handler()); }
+        };
+    };
+
+    const first = makeCall('supervisor-A');
+    const second = makeCall('supervisor-B');
+
+    app.handleIncomingCall(first);
+    app.handleIncomingCall(second);
+
+    assert.strictEqual(first.answeredWith, app.localStream);
+    assert.strictEqual(second.answeredWith, app.localStream);
+    assert.strictEqual(app.viewerCalls.size, 2, 'deben quedar registradas las dos llamadas');
+    assert.ok(app.state.connectedViewers.has('supervisor-A'));
+    assert.ok(app.state.connectedViewers.has('supervisor-B'));
+
+    app.applyVideoTrackToCalls({ kind: 'video', label: 'nueva cámara' });
+    assert.strictEqual(first.sender.replaced && first.sender.replaced.label, 'nueva cámara');
+    assert.strictEqual(second.sender.replaced && second.sender.replaced.label, 'nueva cámara');
+
+    app.stopEmitter();
+    assert.strictEqual(first.closed, true, 'al detener se cierra la llamada de A');
+    assert.strictEqual(second.closed, true, 'al detener se cierra la llamada de B');
+    assert.strictEqual(app.viewerCalls.size, 0);
+    assert.deepStrictEqual(errors, []);
+});
+
+test('la ruta se muestra como relé cuando ICE elige un candidato TURN', async (t) => {
+    const { app } = boot(t);
+
+    const peerConnection = {
+        getStats: async () => new Map([
+            ['pair', { id: 'pair', type: 'candidate-pair', state: 'succeeded', localCandidateId: 'l', remoteCandidateId: 'r' }],
+            ['l', { id: 'l', type: 'local-candidate', candidateType: 'relay', protocol: 'udp' }],
+            ['r', { id: 'r', type: 'remote-candidate', candidateType: 'host' }]
+        ])
+    };
+
+    const route = await app.detectConnectionRoute(peerConnection);
+    // `deepEqual` (no `deepStrictEqual`): el objeto nace en el realm de jsdom.
+    assert.deepEqual({ ...route }, { type: 'relay', relay: true, protocol: 'udp' });
+    assert.strictEqual(app.applyConnectionRoute(route), 'Relé (TURN)');
+    assert.strictEqual(app.elements.connectionRouteValue.textContent, 'Relé (TURN)');
+});
+
+test('una conexión directa se identifica como tal y no rompe si getStats falla', async (t) => {
+    const { app } = boot(t);
+
+    const direct = {
+        getStats: async () => new Map([
+            ['pair', { id: 'pair', type: 'candidate-pair', state: 'succeeded', localCandidateId: 'l', remoteCandidateId: 'r' }],
+            ['l', { id: 'l', type: 'local-candidate', candidateType: 'srflx' }],
+            ['r', { id: 'r', type: 'remote-candidate', candidateType: 'srflx' }]
+        ])
+    };
+    assert.strictEqual((await app.detectConnectionRoute(direct)).relay, false);
+
+    const broken = { getStats: async () => { throw new Error('sin permiso'); } };
+    assert.strictEqual(await app.detectConnectionRoute(broken), null);
+    assert.strictEqual(await app.detectConnectionRoute(null), null);
+});
+
+test('«Probar relé» informa de éxito cuando llega un candidato TURN y de fallo si no', async (t) => {
+    const { app, window, document } = boot(t);
+
+    let behavior = 'relay';
+    window.RTCPeerConnection = function () {
+        const pc = {
+            iceGatheringState: 'gathering',
+            onicecandidate: null,
+            onicegatheringstatechange: null,
+            createDataChannel() {},
+            createOffer: async () => ({ type: 'offer', sdp: 'v=0' }),
+            setLocalDescription: async () => {
+                setTimeout(() => {
+                    if (behavior === 'relay' && pc.onicecandidate) {
+                        pc.onicecandidate({ candidate: { type: 'relay', candidate: 'candidate:relay' } });
+                    }
+                    pc.iceGatheringState = 'complete';
+                    if (pc.onicegatheringstatechange) pc.onicegatheringstatechange();
+                }, 0);
+            },
+            close() { this.closed = true; }
+        };
+        return pc;
+    };
+
+    const ok = await app.checkTurnAvailability(app.iceServers);
+    assert.strictEqual(ok.ok, true);
+
+    behavior = 'none';
+    const failed = await app.checkTurnAvailability(app.iceServers);
+    assert.strictEqual(failed.ok, false);
+    assert.ok(failed.error, 'debe explicar el fallo');
+
+    // Sin RTCPeerConnection disponible no debe lanzar.
+    window.RTCPeerConnection = undefined;
+    window.webkitRTCPeerConnection = undefined;
+    const unsupported = await app.checkTurnAvailability(app.iceServers);
+    assert.strictEqual(unsupported.ok, false);
+    assert.ok(document.getElementById('iceStatus'));
 });

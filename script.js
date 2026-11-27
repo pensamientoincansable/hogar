@@ -1,6 +1,15 @@
 class RemoteVisionApp {
     constructor() {
-        // Configuración mejorada con servidores STUN públicos actualizados
+        // Servidores ICE: STUN para la ruta directa y TURN (relé) para cuando el
+        // supervisor está en otra red y el NAT de alguno de los dos impide el
+        // P2P. Sin TURN, fuera de la red local la conexión se queda esperando.
+        const iceApi = typeof IceServers !== 'undefined' ? IceServers : null;
+        this.iceSettings = iceApi
+            ? iceApi.load()
+            : { customTurn: { urls: '', username: '', credential: '' }, includeDefaultTurn: true };
+        this.iceServers = iceApi ? iceApi.build(this.iceSettings) : [];
+
+        // Configuración mejorada con servidores STUN + TURN
         this.config = {
             peerServer: {
                 host: '0.peerjs.com',
@@ -9,12 +18,11 @@ class RemoteVisionApp {
                 secure: true,
                 debug: 2,
                 config: {
-                    'iceServers': [
-                        { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun2.l.google.com:19302' },
-                        { urls: 'stun:global.stun.twilio.com:3478' }
-                    ]
+                    iceServers: this.iceServers,
+                    iceTransportPolicy: 'all',
+                    // Recoge candidatos de antemano (STUN y TURN) para no
+                    // dejar la negociación a medias en redes lentas.
+                    iceCandidatePoolSize: 4
                 }
             },
             videoQuality: {
@@ -63,7 +71,13 @@ class RemoteVisionApp {
         this.localAudioStream = null;
         this.connectionTimeouts = [];
         this.supervisorAudioElement = null;
+        this.supervisorAudioElements = new Map();
         this.pendingIncomingCalls = new Map();
+        // Llamadas de vídeo activas por supervisor (soporta varios a la vez).
+        this.viewerCalls = new Map();
+        // Último diagnóstico ICE de la conexión del supervisor.
+        this.connectionRoute = null;
+        this.routeCheckTimeout = null;
 
         // La detección de movimiento se ejecuta únicamente en el supervisor.
         this.motionPanels = null;
@@ -115,6 +129,22 @@ class RemoteVisionApp {
             latencyValue: document.getElementById('latencyValue'),
             recentCodes: document.getElementById('recentCodes'),
             connectionDetails: document.getElementById('connectionDetails'),
+            connectionRouteValue: document.getElementById('connectionRouteValue'),
+
+            // Conexión a distancia (servidor TURN / relé)
+            btnIceSettings: document.getElementById('btnIceSettings'),
+            iceModal: document.getElementById('iceModal'),
+            iceModalBody: document.getElementById('iceModalBody'),
+            iceClose: document.getElementById('iceClose'),
+            iceSummary: document.getElementById('iceSummary'),
+            iceStatus: document.getElementById('iceStatus'),
+            iceTurnUrls: document.getElementById('iceTurnUrls'),
+            iceTurnUsername: document.getElementById('iceTurnUsername'),
+            iceTurnCredential: document.getElementById('iceTurnCredential'),
+            iceUsePublicRelay: document.getElementById('iceUsePublicRelay'),
+            btnIceSave: document.getElementById('btnIceSave'),
+            btnIceReset: document.getElementById('btnIceReset'),
+            btnIceTest: document.getElementById('btnIceTest'),
             
             connectionStatus: document.getElementById('connectionStatus'),
             
@@ -140,8 +170,324 @@ class RemoteVisionApp {
         this.loadRecentCodes();
         
         this.elements.videoQuality.value = this.state.settings.videoQuality;
+        this.initIceSettingsUI();
         this.initMotionDetection();
         this.showNotification('Sistema inicializado correctamente', 'success');
+    }
+
+    // ===== CONEXIÓN A DISTANCIA (STUN + TURN) =====
+    /**
+     * La conexión directa (P2P) funciona en la misma red o con NAT sencillo.
+     * Cuando el supervisor está en otra red con NAT estricto, CGNAT o
+     * cortafuegos, el vídeo sólo puede llegar a través de un servidor TURN
+     * (relé). Aquí se prepara el formulario para configurar ese relé.
+     */
+    initIceSettingsUI() {
+        const { btnIceSettings, iceModal, iceClose, btnIceSave, btnIceReset, btnIceTest } = this.elements;
+        const iceApi = typeof IceServers !== 'undefined' ? IceServers : null;
+
+        if (iceApi) this.iceSettings = iceApi.load();
+        this.applyIceSettingsToForm();
+        this.updateIceSummary();
+
+        if (btnIceSettings && iceModal) {
+            btnIceSettings.addEventListener('click', () => this.openIceSettings());
+        }
+        // El resumen de la cabecera es también una puerta al mismo panel.
+        if (this.elements.iceSummary && iceModal) {
+            this.elements.iceSummary.addEventListener('click', () => this.openIceSettings());
+        }
+        if (iceClose && iceModal) {
+            iceClose.addEventListener('click', () => this.closeIceSettings());
+        }
+        if (iceModal) {
+            iceModal.addEventListener('click', (event) => {
+                if (event.target === iceModal) this.closeIceSettings();
+            });
+        }
+        if (btnIceSave) {
+            btnIceSave.addEventListener('click', () => this.saveIceSettings());
+        }
+        if (btnIceReset) {
+            btnIceReset.addEventListener('click', () => this.resetIceSettings());
+        }
+        if (btnIceTest) {
+            btnIceTest.addEventListener('click', () => this.testIceRelay());
+        }
+    }
+
+    applyIceSettingsToForm() {
+        const turn = (this.iceSettings && this.iceSettings.customTurn) || {};
+        const { iceTurnUrls, iceTurnUsername, iceTurnCredential, iceUsePublicRelay } = this.elements;
+
+        if (iceTurnUrls) iceTurnUrls.value = turn.urls || '';
+        if (iceTurnUsername) iceTurnUsername.value = turn.username || '';
+        if (iceTurnCredential) iceTurnCredential.value = turn.credential || '';
+        if (iceUsePublicRelay) iceUsePublicRelay.checked = this.iceSettings.includeDefaultTurn !== false;
+    }
+
+    /** Resume en una línea qué vías de conexión están activas. */
+    updateIceSummary() {
+        const iceApi = typeof IceServers !== 'undefined' ? IceServers : null;
+        const servers = iceApi ? iceApi.build(this.iceSettings) : [];
+        const hasTurn = iceApi ? iceApi.hasTurn(servers) : false;
+        const hasCustom = Boolean(
+            this.iceSettings && this.iceSettings.customTurn && this.iceSettings.customTurn.urls
+        );
+
+        const summary = this.elements.iceSummary;
+        if (summary) {
+            // Con el relé público no se promete nada: la cuota es compartida y
+            // sólo una prueba real confirma que responde.
+            summary.textContent = hasTurn
+                ? (hasCustom ? 'Relé propio + público' : 'Relé público (probar)')
+                : 'Sólo conexión directa';
+            summary.classList.toggle('warn', !hasTurn);
+            summary.title = hasTurn
+                ? 'Pulsa para configurar o probar el relé de conexión a distancia'
+                : 'Sin relé no se puede supervisar desde otra red: pulsa para configurarlo';
+        }
+
+        const status = this.elements.iceStatus;
+        if (status) {
+            if (!hasTurn) {
+                status.className = 'ice-status warn';
+                status.innerHTML = '<i class="fas fa-triangle-exclamation"></i> Sin relé (TURN) la supervisión desde otra red puede no conectar.';
+            } else if (hasCustom) {
+                status.className = 'ice-status ok';
+                status.innerHTML = '<i class="fas fa-circle-check"></i> Usando tu servidor TURN propio: funciona desde cualquier red.';
+            } else {
+                status.className = 'ice-status info';
+                status.innerHTML = '<i class="fas fa-circle-info"></i> Usando el relé público (cuota compartida). Para uso intensivo, añade tu propio TURN.';
+            }
+        }
+
+        return servers;
+    }
+
+    /**
+     * Comprueba de verdad que el relé responde: crea una RTCPeerConnection
+     * con la configuración actual y espera a recibir un candidato TURN. Es la
+     * forma de saber si el relé público sigue teniendo cuota disponible o si
+     * el TURN propio está bien configurado (credenciales, cortafuegos...).
+     */
+    async testIceRelay() {
+        const iceApi = typeof IceServers !== 'undefined' ? IceServers : null;
+        const status = this.elements.iceStatus;
+        const button = this.elements.btnIceTest;
+
+        // Se prueba lo que hay escrito ahora mismo en el formulario.
+        const customTurn = {
+            urls: (this.elements.iceTurnUrls && this.elements.iceTurnUrls.value) || '',
+            username: (this.elements.iceTurnUsername && this.elements.iceTurnUsername.value) || '',
+            credential: (this.elements.iceTurnCredential && this.elements.iceTurnCredential.value) || ''
+        };
+        const includeDefaultTurn = !this.elements.iceUsePublicRelay || this.elements.iceUsePublicRelay.checked;
+
+        if (iceApi) {
+            const validation = iceApi.validateCustomTurn(customTurn);
+            if (!validation.ok) {
+                this.showNotification(validation.error, 'warning');
+                return;
+            }
+        }
+
+        const servers = iceApi
+            ? iceApi.build({ customTurn, includeDefaultTurn })
+            : this.iceServers;
+
+        if (!iceApi || !iceApi.hasTurn(servers)) {
+            this.showNotification('No hay ningún relé TURN configurado que probar', 'warning');
+            return;
+        }
+
+        if (button) {
+            button.disabled = true;
+            button.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Probando…';
+        }
+        if (status) {
+            status.className = 'ice-status info';
+            status.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Probando el relé TURN…';
+        }
+
+        const result = await this.checkTurnAvailability(servers);
+
+        if (button) {
+            button.disabled = false;
+            button.innerHTML = '<i class="fas fa-vial"></i> Probar relé';
+        }
+
+        if (result.ok) {
+            if (status) {
+                status.className = 'ice-status ok';
+                status.innerHTML = '<i class="fas fa-circle-check"></i> El relé TURN responde: podrás supervisar desde otra red.';
+            }
+            this.showNotification('Relé TURN operativo', 'success');
+        } else {
+            if (status) {
+                status.className = 'ice-status warn';
+                status.innerHTML = '<i class="fas fa-triangle-exclamation"></i> El relé TURN no responde: ' +
+                    (result.error || 'revisa la URL, el usuario y la contraseña') +
+                    '. Sin él, desde otra red puede no conectar.';
+            }
+            this.showNotification('El relé TURN no responde', 'warning');
+        }
+    }
+
+    /**
+     * Devuelve `{ok}` o `{ok:false, error}`. Nunca lanza: un fallo aquí sólo
+     * significa que la conexión dependerá de la ruta directa.
+     */
+    checkTurnAvailability(servers) {
+        return new Promise(resolve => {
+            const PC = window.RTCPeerConnection || window.webkitRTCPeerConnection;
+            if (!PC) {
+                resolve({ ok: false, error: 'este navegador no permite comprobarlo' });
+                return;
+            }
+
+            let pc = null;
+            let finished = false;
+            let relayFound = false;
+            let timeout = null;
+
+            const finish = (result) => {
+                if (finished) return;
+                finished = true;
+                if (timeout !== null) clearTimeout(timeout);
+                try { if (pc) pc.close(); } catch (error) { /* ya cerrada */ }
+                resolve(result);
+            };
+
+            // Un relé sano responde en pocos segundos; si no, se informa.
+            timeout = setTimeout(() => finish({
+                ok: false,
+                error: 'tiempo de espera agotado'
+            }), 12000);
+
+            try {
+                pc = new PC({ iceServers: servers, iceTransportPolicy: 'all' });
+
+                pc.onicecandidate = (event) => {
+                    if (!event.candidate) return;
+                    if (event.candidate.type === 'relay') {
+                        relayFound = true;
+                        finish({ ok: true });
+                    }
+                };
+
+                pc.onicegatheringstatechange = () => {
+                    if (pc && pc.iceGatheringState === 'complete' && !relayFound) {
+                        finish({ ok: false, error: 'no se obtuvo ningún candidato de relé' });
+                    }
+                };
+
+                // Un canal de datos basta: no se envía ni se recibe vídeo.
+                pc.createDataChannel('ice-test');
+                Promise.resolve(pc.createOffer())
+                    .then(offer => pc.setLocalDescription(offer))
+                    .catch(() => finish({ ok: false, error: 'no se pudo iniciar la prueba' }));
+            } catch (error) {
+                finish({ ok: false, error: 'no se pudo iniciar la prueba' });
+            }
+        });
+    }
+
+    openIceSettings() {
+        this.applyIceSettingsToForm();
+        this.updateIceSummary();
+        if (this.elements.iceModal) {
+            this.elements.iceModal.classList.remove('hidden');
+            if (this.elements.iceModalBody) this.elements.iceModalBody.scrollTop = 0;
+        }
+        if (this.elements.iceTurnUrls) this.elements.iceTurnUrls.focus();
+    }
+
+    closeIceSettings() {
+        if (this.elements.iceModal) this.elements.iceModal.classList.add('hidden');
+    }
+
+    /**
+     * Guarda la configuración del relé, reconstruye la lista ICE y reinicia
+     * PeerJS para que las conexiones nuevas ya usen los servidores nuevos.
+     * Nunca corta la cámara: sólo se reprograma la conexión.
+     */
+    saveIceSettings() {
+        const iceApi = typeof IceServers !== 'undefined' ? IceServers : null;
+        if (!iceApi) {
+            this.showNotification('El módulo de conexión no está disponible', 'error');
+            return;
+        }
+
+        const customTurn = {
+            urls: (this.elements.iceTurnUrls && this.elements.iceTurnUrls.value) || '',
+            username: (this.elements.iceTurnUsername && this.elements.iceTurnUsername.value) || '',
+            credential: (this.elements.iceTurnCredential && this.elements.iceTurnCredential.value) || ''
+        };
+        const includeDefaultTurn = !this.elements.iceUsePublicRelay || this.elements.iceUsePublicRelay.checked;
+
+        const validation = iceApi.validateCustomTurn(customTurn);
+        if (!validation.ok) {
+            this.showNotification(validation.error, 'warning');
+            return;
+        }
+
+        // save() devuelve la versión normalizada y persistida.
+        const settings = iceApi.save({ customTurn, includeDefaultTurn });
+        this.iceSettings = settings;
+        this.iceServers = iceApi.build(settings);
+        this.config.peerServer.config.iceServers = this.iceServers;
+
+        this.applyIceSettingsToForm();
+        this.updateIceSummary();
+        this.closeIceSettings();
+        this.showNotification('Servidores de conexión actualizados', 'success');
+
+        // PeerJS crea la RTCPeerConnection con la configuración que recibe al
+        // instanciarse: hay que volver a registrarse para aplicarla.
+        this.refreshPeerConfiguration();
+    }
+
+    resetIceSettings() {
+        const iceApi = typeof IceServers !== 'undefined' ? IceServers : null;
+        this.iceSettings = iceApi
+            ? iceApi.save({ customTurn: iceApi.emptyCustomTurn(), includeDefaultTurn: true })
+            : { customTurn: { urls: '', username: '', credential: '' }, includeDefaultTurn: true };
+        this.iceServers = iceApi ? iceApi.build(this.iceSettings) : [];
+        this.config.peerServer.config.iceServers = this.iceServers;
+
+        this.applyIceSettingsToForm();
+        this.updateIceSummary();
+        this.showNotification('Configuración del relé restablecida', 'info');
+        this.refreshPeerConfiguration();
+    }
+
+    /**
+     * Aplica los servidores ICE nuevos. Reiniciar PeerJS cerraría las
+     * conexiones abiertas, así que nunca se hace con una transmisión en
+     * curso: en ese caso la lista nueva se usará en la próxima conexión.
+     */
+    async refreshPeerConfiguration() {
+        if (!this.state.isEmitter && !this.state.isViewer) return;
+
+        const inUse = (this.state.isEmitter && this.state.isStreaming) ||
+            (this.state.isViewer && this.state.isConnected);
+        if (inUse) {
+            this.showNotification('Se aplicará en la próxima conexión, sin cortar la actual', 'info');
+            return;
+        }
+
+        try {
+            if (this.state.isEmitter) {
+                if (!this.state.currentCode) return;
+                await this.registerEmitterCode();
+            } else if (this.state.hostPeerId) {
+                await this.attemptConnection(this.state.hostPeerId);
+            }
+        } catch (error) {
+            console.warn('No se pudo aplicar el nuevo relé ahora mismo:', error);
+            this.showNotification('Se aplicará en la próxima conexión', 'info');
+        }
     }
 
     // ===== DETECCIÓN DE MOVIMIENTO (motion.js) =====
@@ -796,15 +1142,15 @@ class RemoteVisionApp {
             this.elements.localVideo.srcObject = null;
         }
 
-        if (this.currentCall) {
-            try { this.currentCall.close(); } catch (error) { /* ya estaba cerrada */ }
-            this.currentCall = null;
-        }
+        // Cierra la llamada de CADA supervisor, no sólo la última.
+        const calls = new Set([...this.viewerCalls.values(), this.currentCall].filter(Boolean));
+        this.viewerCalls.clear();
+        calls.forEach(call => {
+            try { call.close(); } catch (error) { /* ya estaba cerrada */ }
+        });
+        this.currentCall = null;
 
-        if (this.supervisorAudioElement) {
-            this.supervisorAudioElement.remove();
-            this.supervisorAudioElement = null;
-        }
+        this.releaseAllSupervisorAudio();
 
         this.elements.btnStartEmitter.classList.remove('hidden');
         this.elements.btnStopEmitter.classList.add('hidden');
@@ -862,13 +1208,8 @@ class RemoteVisionApp {
             this.localStream.removeTrack(currentTrack);
             this.localStream.addTrack(newVideoTrack);
             
-            if (this.currentCall) {
-                const sender = this.currentCall.peerConnection.getSenders()
-                    .find(s => s.track && s.track.kind === 'video');
-                if (sender) {
-                    sender.replaceTrack(newVideoTrack);
-                }
-            }
+            // La nueva cámara llega a todos los supervisores conectados.
+            this.applyVideoTrackToCalls(newVideoTrack);
             
             this.showNotification(`Cámara cambiada a ${this.state.isFrontCamera ? 'frontal' : 'trasera'}`, 'success');
             
@@ -959,6 +1300,15 @@ class RemoteVisionApp {
         this.updateViewerStatus('Conectando...', 'connecting');
         this.updateConnectionPrompt('CONECTANDO…', 'Buscando al emisor y esperando su cámara');
         this.showNotification(`Conectando a ${code}...`, 'info');
+
+        // Aviso temprano: desde otra red, sin relé (TURN) la conexión puede
+        // quedarse esperando aunque el código sea correcto.
+        if (typeof IceServers !== 'undefined' && !IceServers.hasTurn(this.iceServers)) {
+            this.showNotification(
+                'No hay servidor de relé (TURN): si estás en otra red, añádelo en «Conexión a distancia»',
+                'warning'
+            );
+        }
 
         try {
             await this.attemptConnection(code);
@@ -1086,9 +1436,13 @@ class RemoteVisionApp {
 
     async attemptVideoCall(code) {
         return new Promise(async (resolve, reject) => {
+            // Evita que el cierre posterior al error de ICE dé un mensaje
+            // engañoso ("El emisor no inició la cámara").
+            let iceFailure = false;
+
             try {
                 const callTimeout = setTimeout(() => {
-                    reject(new Error('El emisor no inició la cámara dentro de 90 segundos'));
+                    reject(new Error('El emisor no inició la cámara a tiempo o la red impidió la conexión'));
                 }, 90000);
                 
                 this.connectionTimeouts.push(callTimeout);
@@ -1108,6 +1462,10 @@ class RemoteVisionApp {
                     throw new Error('No se pudo crear la llamada');
                 }
                 
+                // Diagnóstico: cuando el vídeo empieza a llegar se comprueba si
+                // va directo o por el relé, y se avisa si la conexión es frágil.
+                this.startRouteDiagnostics(call);
+                
                 call.on('stream', (remoteStream) => {
                     clearTimeout(callTimeout);
                     console.log('✅ Stream remoto recibido');
@@ -1118,6 +1476,10 @@ class RemoteVisionApp {
                 call.on('close', () => {
                     clearTimeout(callTimeout);
                     console.log('Llamada cerrada');
+                    // Si el emisor no inició la cámara aparece un error de ICE
+                    // justo antes del cierre: se deja que ese error dé el
+                    // mensaje (reintento o consejo sobre el relé TURN).
+                    if (iceFailure) return;
                     if (!this.state.isConnected) {
                         reject(new Error('Llamada cerrada antes de recibir stream'));
                     } else {
@@ -1128,7 +1490,12 @@ class RemoteVisionApp {
                 call.on('error', (err) => {
                     clearTimeout(callTimeout);
                     console.error('Error en llamada:', err);
-                    reject(new Error('Error en la llamada de video: ' + err.message));
+                    iceFailure = true;
+                    reject(new Error(
+                        'No se pudo establecer la conexión con el emisor. ' +
+                        'Comprueba que ambos tienen Internet y que hay un servidor TURN ' +
+                        '(«Conexión a distancia») si están en redes distintas.'
+                    ));
                 });
                 
                 this.currentCall = call;
@@ -1355,6 +1722,10 @@ class RemoteVisionApp {
         try {
             call.answer(this.localStream);
             this.currentCall = call;
+            // Se guarda cada llamada por supervisor: así el vídeo llega a
+            // varios dispositivos a la vez y el cambio de cámara o el audio
+            // bidireccional se aplican a todas, no sólo a la última.
+            this.viewerCalls.set(call.peer, call);
             console.log('✅ Aceptada llamada de:', call.peer);
 
             this.broadcastData({
@@ -1367,16 +1738,9 @@ class RemoteVisionApp {
             call.on('stream', (supervisorStream) => {
                 console.log('Audio recibido del supervisor:', call.peer);
 
-                if (!this.supervisorAudioElement) {
-                    this.supervisorAudioElement = document.createElement('audio');
-                    this.supervisorAudioElement.autoplay = true;
-                    this.supervisorAudioElement.volume = 1.0;
-                    this.supervisorAudioElement.style.display = 'none';
-                    document.body.appendChild(this.supervisorAudioElement);
-                }
-
-                this.supervisorAudioElement.srcObject = supervisorStream;
-                this.supervisorAudioElement.play().catch(error => {
+                const audioElement = this.getSupervisorAudioElement(call.peer);
+                audioElement.srcObject = supervisorStream;
+                audioElement.play().catch(error => {
                     console.log('Audio del supervisor bloqueado hasta una interacción:', error);
                 });
                 this.showNotification('Supervisor habilitó audio bidireccional', 'info');
@@ -1385,23 +1749,84 @@ class RemoteVisionApp {
             call.on('close', () => {
                 this.state.connectedViewers.delete(call.peer);
                 this.updateConnectedClients();
+                if (this.viewerCalls.get(call.peer) === call) this.viewerCalls.delete(call.peer);
                 if (this.currentCall === call) this.currentCall = null;
-
-                if (this.supervisorAudioElement) {
-                    this.supervisorAudioElement.remove();
-                    this.supervisorAudioElement = null;
-                }
+                this.releaseSupervisorAudio(call.peer);
             });
 
             call.on('error', (error) => {
                 console.error('Error en llamada con supervisor:', error);
                 this.state.connectedViewers.delete(call.peer);
                 this.updateConnectedClients();
+                if (this.viewerCalls.get(call.peer) === call) this.viewerCalls.delete(call.peer);
                 if (this.currentCall === call) this.currentCall = null;
+                this.releaseSupervisorAudio(call.peer);
             });
         } catch (error) {
             console.error('No se pudo aceptar la llamada del supervisor:', error);
             try { call.close(); } catch (closeError) { /* ignorado */ }
+        }
+    }
+
+    /** Un elemento de audio oculto por cada supervisor (audio bidireccional). */
+    getSupervisorAudioElement(viewerId) {
+        if (this.supervisorAudioElement && this.supervisorAudioElement.dataset.viewer === viewerId) {
+            return this.supervisorAudioElement;
+        }
+
+        const audio = document.createElement('audio');
+        audio.autoplay = true;
+        audio.volume = 1.0;
+        audio.style.display = 'none';
+        audio.dataset.viewer = viewerId;
+        document.body.appendChild(audio);
+
+        if (!this.supervisorAudioElements) this.supervisorAudioElements = new Map();
+        this.supervisorAudioElements.set(viewerId, audio);
+        return audio;
+    }
+
+    releaseAllSupervisorAudio() {
+        if (this.supervisorAudioElements) {
+            this.supervisorAudioElements.forEach(audio => audio.remove());
+            this.supervisorAudioElements.clear();
+        }
+        if (this.supervisorAudioElement) {
+            this.supervisorAudioElement.remove();
+            this.supervisorAudioElement = null;
+        }
+    }
+
+    releaseSupervisorAudio(viewerId) {
+        if (!this.supervisorAudioElements) return;
+
+        const audio = this.supervisorAudioElements.get(viewerId);
+        this.supervisorAudioElements.delete(viewerId);
+        if (audio) audio.remove();
+        if (this.supervisorAudioElement === audio) this.supervisorAudioElement = null;
+    }
+
+    /** Aplica un cambio de pista de vídeo a todas las llamadas activas. */
+    applyVideoTrackToCalls(track) {
+        this.viewerCalls.forEach((call, viewerId) => {
+            try {
+                const senders = call.peerConnection && call.peerConnection.getSenders
+                    ? call.peerConnection.getSenders()
+                    : [];
+                const sender = senders.find(s => s.track && s.track.kind === 'video');
+                if (sender) sender.replaceTrack(track);
+            } catch (error) {
+                console.warn('No se pudo actualizar la cámara de un supervisor:', viewerId, error);
+            }
+        });
+
+        // Compatibilidad: llamadas que no estén registradas en el mapa.
+        if (this.currentCall && !this.viewerCalls.has(this.currentCall.peer)) {
+            try {
+                const senders = this.currentCall.peerConnection.getSenders();
+                const sender = senders.find(s => s.track && s.track.kind === 'video');
+                if (sender) sender.replaceTrack(track);
+            } catch (error) { /* ignorado */ }
         }
     }
 
@@ -1567,6 +1992,12 @@ class RemoteVisionApp {
 
     disconnectFromEmitter() {
         this.clearAllTimeouts();
+
+        if (this.routeCheckTimeout) {
+            clearTimeout(this.routeCheckTimeout);
+            this.routeCheckTimeout = null;
+        }
+        this.connectionRoute = null;
         
         if (this.currentCall) {
             this.currentCall.close();
@@ -1606,6 +2037,7 @@ class RemoteVisionApp {
         
         this.updateViewerStatus('Desconectado', 'disconnected');
         this.updateConnectionState('Desconectado');
+        if (this.elements.connectionRouteValue) this.elements.connectionRouteValue.textContent = '--';
         
         this.stopUptimeTimer();
         this.stopConnectionStatsMonitoring();
@@ -1642,7 +2074,13 @@ class RemoteVisionApp {
                 }
             }, 2000 * this.state.connectionAttempts);
         } else {
-            this.showErrorModal(`No se pudo conectar después de ${this.state.connectionAttempts} intentos: ${error}`);
+            const hasTurn = typeof IceServers === 'undefined' || IceServers.hasTurn(this.iceServers);
+            const hint = hasTurn
+                ? ' Si sigues en otra red, comprueba que tu servidor TURN sea accesible.'
+                : ' Si el supervisor está en otra red, configura un servidor TURN en «Conexión a distancia».';
+            this.showErrorModal(
+                `No se pudo conectar después de ${this.state.connectionAttempts} intentos: ${error}.${hint}`
+            );
             this.updateViewerStatus('Error de conexión', 'disconnected');
         }
     }
@@ -1721,7 +2159,96 @@ class RemoteVisionApp {
                 <div class="client-status online"></div>
             `;
             container.appendChild(client);
+
         });
+    }
+
+    // ===== DIAGNÓSTICO DE LA RUTA (directa o por relé) =====
+    /**
+     * Espera a que ICE elija pareja de candidatos y guarda cómo va la
+     * conexión. Sirve para explicar al usuario por qué a veces funciona sólo
+     * en la misma red: si no hay candidato "relay", es que no hay TURN.
+     */
+    startRouteDiagnostics(call) {
+        if (this.routeCheckTimeout) {
+            clearTimeout(this.routeCheckTimeout);
+            this.routeCheckTimeout = null;
+        }
+
+        const peerConnection = call && call.peerConnection;
+        if (!peerConnection) return;
+
+        const attempt = (retries) => {
+            this.detectConnectionRoute(peerConnection).then(route => {
+                if (route) {
+                    this.applyConnectionRoute(route);
+                } else if (retries > 0) {
+                    this.routeCheckTimeout = setTimeout(() => attempt(retries - 1), 1500);
+                }
+            });
+        };
+
+        // ICE suele resolverse en 1-3 s; se reintenta un poco por redes lentas.
+        this.routeCheckTimeout = setTimeout(() => attempt(3), 1200);
+    }
+
+    /** Lee las estadísticas ICE y resume el tipo de conexión. */
+    async detectConnectionRoute(peerConnection) {
+        if (!peerConnection || typeof peerConnection.getStats !== 'function') return null;
+
+        try {
+            const report = await peerConnection.getStats();
+            let pair = null;
+
+            report.forEach(stat => {
+                if (!pair && stat && stat.type === 'candidate-pair' &&
+                    (stat.state === 'succeeded' || stat.state === 'in-progress')) {
+                    pair = stat;
+                }
+            });
+
+            if (!pair) return null;
+
+            let local = null;
+            let remote = null;
+            report.forEach(stat => {
+                if (!stat) return;
+                if (stat.id === pair.localCandidateId) local = stat;
+                if (stat.id === pair.remoteCandidateId) remote = stat;
+            });
+
+            const type = (local && local.candidateType) || (remote && remote.candidateType) || 'unknown';
+            return {
+                type,
+                relay: type === 'relay',
+                protocol: (local && local.protocol) || (remote && remote.protocol) || ''
+            };
+        } catch (error) {
+            return null;
+        }
+    }
+
+    applyConnectionRoute(route) {
+        this.connectionRoute = route;
+        const labels = {
+            relay: 'Relé (TURN)',
+            srflx: 'Directa (NAT)',
+            prflx: 'Directa (NAT)',
+            host: 'Red local',
+            unknown: 'Detectando…'
+        };
+        const label = labels[route.type] || 'Directa';
+
+        if (this.elements.connectionRouteValue) {
+            this.elements.connectionRouteValue.textContent = label;
+        }
+
+        // No se pisa el estado cuando el supervisor está usando el micrófono.
+        const state = this.elements.connectionState ? this.elements.connectionState.textContent : '';
+        if (!/Hablando/i.test(state)) {
+            this.updateConnectionState(route.relay ? 'Conectado (por relé)' : 'Conectado');
+        }
+        return label;
     }
 
     updateConnectionStats() {
